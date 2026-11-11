@@ -11,8 +11,10 @@
 #   /vllm-workspace/vllm-ascend/examples/offline_disaggregated_prefill/
 #
 # 用法：
-#   bash scripts/pd/fetch_official.sh              # 自动探测（在容器内或宿主机均可）
-#   bash scripts/pd/fetch_official.sh --path DIR   # 指定镜像内目录
+#   bash ../../../../_shared/pd/fetch_official.sh
+#   bash _shared/pd/fetch_official.sh --config <部署目录>/config.env [--path <镜像内目录>]
+#
+# 落盘位置：<版本目录>/.tools/（按镜像版本存放，同一版本下所有模型共用）
 # =============================================================================
 set -euo pipefail
 
@@ -20,15 +22,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/../lib/common.sh"
 
-load_config
-
-TOOLS="$AE_ROOT/.tools"
-mkdir -p "$TOOLS"
-
+CFG=""
 SEARCH_DIR=""
-if [ "${1:-}" = "--path" ] && [ -n "${2:-}" ]; then
-    SEARCH_DIR="$2"
-fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --path) SEARCH_DIR="${2:-}"; shift 2 ;;
+        -h | --help) sed -n '2,9p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
+    esac
+done
+
+load_config "$CFG"
+
+# 版本目录 = <版本>/<模型>/<形态> 往上两级
+IMAGE_DIR="$(cd "$AE_DEPLOY_DIR/../.." && pwd)"
+TOOLS="$IMAGE_DIR/.tools"
+mkdir -p "$TOOLS"
 
 # 在容器内执行的探测脚本
 PROBE='

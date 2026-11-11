@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run_dp_template_d.sh —— Decode 单 rank 启动模板
+# run_dp_template_d.sh —— DeepSeek-V4.1-Flash Decode 单 rank 模板
 #
 # 由官方 launch_online_dp.py 调用，8 个位置参数（与 P 侧一致）：
 #   $1 ASCEND_RT_VISIBLE_DEVICES  $2 --port
@@ -8,14 +8,14 @@
 #   $5 --data-parallel-address    $6 --data-parallel-rpc-port
 #   $7 --tensor-parallel-size     $8 --prefill-context-parallel-size（D 侧恒为 1）
 #
-# ⚠ 不要照搬 Prefill 的 PCP / MegaMoE / prefix-caching / enforce-eager
+# ⚠ 不要照搬 Prefill 的 PCP / MegaMoE / prefix-caching / eager / swa-bounded-replay
 # =============================================================================
 set -uo pipefail
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/usr/local/lib/"
 
-: "${MODEL_PATH:?必须通过 start_role.sh 启动}"
+: "${MODEL_PATH:?必须通过 start_d.sh 启动}"
 : "${LOCAL_IP:?缺少 LOCAL_IP}"
 
 RANK="${4:-0}"
@@ -27,6 +27,7 @@ export HCCL_SOCKET_IFNAME="${NIC_NAME}"
 export ASCEND_RT_VISIBLE_DEVICES="$1"
 export VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-36000}"
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export VLLM_USE_V2_MODEL_RUNNER=1
 export HCCL_BUFFSIZE="${HCCL_BUFFSIZE_D:-4096}"
 [ -n "${HCCL_EXEC_TIMEOUT:-}" ] && export HCCL_EXEC_TIMEOUT
 
@@ -44,6 +45,10 @@ KV_TRANSFER_CONFIG=$(cat <<JSON
 JSON
 )
 
+ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
+ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"multistream_overlap_shared_expert":true,"recompute_scheduler_enable":true}'
+SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'
+
 ARGS=(
     "$MODEL_PATH"
     --host 0.0.0.0
@@ -54,25 +59,33 @@ ARGS=(
     --data-parallel-rpc-port "$6"
     --tensor-parallel-size "$7"
     --served-model-name "${SERVED_MODEL_NAME}"
-    --max-model-len "${MAX_MODEL_LEN:-32768}"
-    --max-num-batched-tokens "${D_MAX_NUM_BATCHED_TOKENS:-512}"
-    --max-num-seqs "${D_MAX_NUM_SEQS:-72}"
-    --gpu-memory-utilization "${GPU_MEM_UTIL:-0.9}"
+    --max-model-len "${MAX_MODEL_LEN:-1048576}"
+    --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS_D:-512}"
+    --max-num-seqs "${MAX_NUM_SEQS_D:-72}"
+    --gpu-memory-utilization "${GPU_MEM_UTIL:-0.95}"
     --block-size "${BLOCK_SIZE:-128}"
     --trust-remote-code
-    --async-scheduling                 # Decode 专属：异步调度提升解码并发
-    --no-enable-prefix-caching         # Decode 侧改走重计算，省显存
+    --enable-expert-parallel
+    --seed 1024
+    --speculative-config "$SPEC_CONFIG"
+    --tokenizer-mode deepseek_v41
+    --reasoning-parser deepseek_v41
+    --tool-call-parser deepseek_v41
+    --enable-auto-tool-choice
+    --safetensors-load-strategy lazy
+    --engram-config "$ENGRAM_CONFIG"
+    --additional-config "$ADDITIONAL_CONFIG"
+    --async-scheduling                  # D 专属：调度与计算流水化
+    --no-swa-bounded-replay
+    --no-enable-prefix-caching          # D 侧不做 prefill，缓存只白占显存
     --kv-transfer-config "$KV_TRANSFER_CONFIG"
 )
 
 [ -n "${QUANTIZATION:-}" ] && [ "$QUANTIZATION" != "none" ] && ARGS+=(--quantization "$QUANTIZATION")
 
-# Decode 侧图捕获（FULL_DECODE_ONLY）。整图捕获失败时可改 PIECEWISE 降级
+# Decode 侧图捕获。整图捕获失败/显存吃紧时可改 PIECEWISE 或 off
 if [ "${DECODE_CUDAGRAPH:-FULL_DECODE_ONLY}" != "off" ]; then
     ARGS+=(--compilation-config "{\"cudagraph_mode\":\"${DECODE_CUDAGRAPH:-FULL_DECODE_ONLY}\"}")
 fi
-
-# shellcheck disable=SC2206
-[ -n "${EXTRA_VLLM_ARGS:-}" ] && ARGS+=($EXTRA_VLLM_ARGS)
 
 exec vllm serve "${ARGS[@]}"

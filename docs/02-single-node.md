@@ -4,9 +4,12 @@
 
 ## 1. 配置
 
+单机形态的配置在 `<版本>/<模型>/single/config.env`。已有该模型目录时直接改；没有就先从模板复制：
+
 ```bash
-cp config/env.example config/env
-vim config/env
+cp -r _template/vX.Y.Z-hw/ModelName v0.30.0-a3/<新模型名>
+cd v0.30.0-a3/<新模型名>/single
+vim config.env
 ```
 
 关键项：
@@ -28,7 +31,7 @@ MAX_MODEL_LEN=32768
 ## 2. 拉起容器
 
 ```bash
-bash scripts/start_container.sh
+bash ../../../_shared/start_container.sh
 ```
 
 相比裸 `docker run`，脚本补了四项现场必需项，这四项不是"优化"，缺了会直接失败：
@@ -43,8 +46,8 @@ bash scripts/start_container.sh
 ## 3. 启动服务
 
 ```bash
-bash scripts/serve_single.sh                 # 后台，日志 logs/single.log
-bash scripts/serve_single.sh --foreground    # 前台，便于观察加载过程
+bash ./start.sh                 # 后台，日志 logs/single.log
+bash ./start.sh --foreground    # 前台，便于观察加载过程
 ```
 
 脚本在宿主机上执行会自动 `docker exec` 进容器；已在容器内则直接启动。启动后会自动等 `/health` 就绪（超时取 `VLLM_ENGINE_READY_TIMEOUT_S`）。
@@ -62,7 +65,7 @@ bash scripts/serve_single.sh --foreground    # 前台，便于观察加载过程
 ## 4. 验证
 
 ```bash
-bash scripts/health_check.sh
+bash ../../../_shared/health_check.sh
 ```
 
 三层验证，全部通过才算部署完成：
@@ -91,7 +94,7 @@ curl --noproxy '*' http://127.0.0.1:8000/v1/chat/completions \
 | `HCCL Communication_Error` | `nofile` 太小 / `NIC_NAME` 错 | 加 ulimit；核对网卡 |
 | 显存 OOM | `GPU_MEM_UTIL` 过高或 `MAX_MODEL_LEN` 过大 | 降到 0.85，缩短上下文 |
 | 加载到一半卡住 | 权重在慢速共享存储上 | 拷到本地 NVMe |
-| 端口 8000 被占 | 上次进程未退 | `bash scripts/stop.sh --services` |
+| 端口 8000 被占 | 上次进程未退 | `bash ../../../_shared/stop.sh --services` |
 
 详细排查见 [05-troubleshooting.md](05-troubleshooting.md)。
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# serve_single.sh —— 单机多卡部署（vllm serve 直起）
+# serve_single.sh —— 单机多卡部署（vllm serve 直起，通用实现）
+#
+# 由各模型的 single/start.sh 调用，通常不需要直接执行。
 #
 # 用法：
-#   bash scripts/serve_single.sh             # 后台启动，日志 logs/single.log
-#   bash scripts/serve_single.sh --foreground # 前台启动，便于看加载过程
+#   bash _shared/serve_single.sh --config <部署目录>/config.env [--foreground]
 #
-# 说明：宿主机上执行时会自动 docker exec 进容器；若已在容器内则直接启动
+# 说明：宿主机上执行会自动 docker exec 进容器；若已在容器内则直接启动
 # =============================================================================
 set -euo pipefail
 
@@ -14,31 +15,39 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
-
-[ "$DEPLOY_MODE" = "single" ] || die "当前 DEPLOY_MODE=$DEPLOY_MODE，单机启动请设为 single"
-
+CFG=""
 FG=0
-[ "${1:-}" = "--foreground" ] && FG=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --foreground) FG=1; shift ;;
+        -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
+    esac
+done
 
-LOG_DIR="$AE_ROOT/logs"
+load_config "$CFG"
+
+[ "$DEPLOY_MODE" = "single" ] || die "当前 DEPLOY_MODE=$DEPLOY_MODE，单机启动请在 config.env 设为 single"
+
+LOG_DIR="$AE_DEPLOY_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/single.log"
 
 NPU=$(npu_count)
 if [ "$NPU" -gt 0 ] 2>/dev/null; then
-    if [ $((NPU % SINGLE_TP)) -ne 0 ] 2>/dev/null; then
-        warn "NPU 数 $NPU 不能被 TP=$SINGLE_TP 整除，按 vLLM 规则 TP 应整除卡数"
-    fi
     if [ "$NPU" -lt "$SINGLE_TP" ] 2>/dev/null; then
         die "本机 NPU=$NPU < SINGLE_TP=$SINGLE_TP"
+    fi
+    if [ $((NPU % SINGLE_TP)) -ne 0 ] 2>/dev/null; then
+        warn "NPU 数 $NPU 不能被 TP=$SINGLE_TP 整除；vLLM 要求 TP 整除卡数"
     fi
 fi
 
 port_busy "$SINGLE_PORT" && die "端口 $SINGLE_PORT 已被占用（可能是上一次未退出的服务）"
 
-# 本机 IP（用于 HCCL 绑定，多机扩展时同样适用）
-LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+[ -n "$LOCAL_IP" ] || LOCAL_IP="127.0.0.1"
 
 # ---------- 组装 vllm serve 参数 ----------
 ARGS=(vllm serve "$MODEL_PATH")
@@ -69,6 +78,7 @@ ENV_PREFIX+="VLLM_ENGINE_READY_TIMEOUT_S='${VLLM_ENGINE_READY_TIMEOUT_S}' PYTORC
 
 cat <<INFO
 == 单机部署 ==
+   配置      : $AE_CONFIG
    模型      : $MODEL_PATH
    对外模型名: $SERVED_MODEL_NAME
    TP / DP   : $SINGLE_TP / ${SINGLE_DP:-1}
@@ -82,15 +92,16 @@ if have vllm; then
     if [ "$FG" = "1" ]; then
         eval "${ENV_PREFIX}${CMD}"
     else
-        nohup bash -c "${ENV_PREFIX}${CMD}" >"$LOG_FILE" 2>&1 < /dev/null &
+        nohup bash -c "${ENV_PREFIX}${CMD}" >"$LOG_FILE" 2>&1 </dev/null &
         info "已后台启动 pid=$!"
     fi
 else
-    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME" || die "容器 $CONTAINER_NAME 未运行，先执行： make up"
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME" || die "容器 $CONTAINER_NAME 未运行，先执行： bash ../../../_shared/start_container.sh"
     if [ "$FG" = "1" ]; then
         docker exec -it "$CONTAINER_NAME" bash -lc "${ENV_PREFIX}exec ${CMD}"
     else
-        docker exec -d "$CONTAINER_NAME" bash -lc "${ENV_PREFIX}exec ${CMD} > '${WORKDIR_CTR}/logs/single.log' 2>&1"
+        docker exec -d "$CONTAINER_NAME" bash -lc "${ENV_PREFIX}exec ${CMD} > '${WORKDIR_CTR}/${LOG_FILE#$AE_ROOT/}' 2>&1" 2>/dev/null \
+            || docker exec -d "$CONTAINER_NAME" bash -lc "${ENV_PREFIX}exec ${CMD} > /tmp/single.log 2>&1"
         info "已在容器内后台启动"
     fi
 fi
@@ -101,5 +112,5 @@ if [ "$FG" = "0" ]; then
         warn "首次加载大模型可能耗时很长，可持续观察： tail -f $LOG_FILE"
         exit 1
     }
-    ok "服务已就绪，验证： bash scripts/health_check.sh"
+    ok "服务已就绪，验证： bash ../../../_shared/health_check.sh"
 fi

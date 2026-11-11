@@ -3,7 +3,7 @@
 """
 start_proxy.py —— PD 代理启动器（通用版）
 
-职责：读 config/env 里的节点列表与端口规划，自动生成
+职责：读部署目录下 config.env 里的节点列表与端口规划，自动生成
      (节点数 × 每台 DP 数) 个 Prefill / Decode 端点，
      再 exec 官方代理脚本 load_balance_proxy_server_example.py。
 
@@ -11,10 +11,10 @@ start_proxy.py —— PD 代理启动器（通用版）
      官方示例要求 --prefiller-hosts 与 --prefiller-ports 严格等长，
      手写列表极易出错且改拓扑时要改两处。
 
-用法：
-    python3 scripts/pd/start_proxy.py --dry-run      # 只打印将执行的命令
-    python3 scripts/pd/start_proxy.py                # 前台启动
-    nohup python3 scripts/pd/start_proxy.py > logs/proxy.log 2>&1 &
+用法（在部署目录内执行）：
+    python3 ../../../_shared/pd/start_proxy.py --dry-run   # 只打印将执行的命令
+    nohup python3 ../../../_shared/pd/start_proxy.py > logs/proxy.log 2>&1 &
+或显式： --config <部署目录>/config.env
 """
 
 import argparse
@@ -23,9 +23,8 @@ import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-DEFAULT_CONFIG = os.path.join(ROOT, "config", "env")
 PROXY_SCRIPT_NAME = "load_balance_proxy_server_example.py"
+DEFAULT_CONFIG = os.path.join(os.getcwd(), "config.env")
 
 
 def _clean(val):
@@ -59,13 +58,13 @@ def build_endpoints(hosts, base_port, per_host):
     return [(h, base_port + i) for h in hosts for i in range(per_host)]
 
 
-def find_proxy_script(explicit):
+def find_proxy_script(explicit, image_dir, deploy_dir):
     cands = []
     if explicit:
         cands.append(explicit)
     cands += [
-        os.path.join(ROOT, ".tools", PROXY_SCRIPT_NAME),
-        os.path.join(HERE, PROXY_SCRIPT_NAME),
+        os.path.join(image_dir, ".tools", PROXY_SCRIPT_NAME),
+        os.path.join(deploy_dir, ".tools", PROXY_SCRIPT_NAME),
         "/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/" + PROXY_SCRIPT_NAME,
     ]
     for p in cands:
@@ -84,10 +83,16 @@ def main():
     args = ap.parse_args()
 
     if not os.path.isfile(args.config):
-        sys.stderr.write("配置文件不存在：%s\n先执行 cp config/env.example config/env\n" % args.config)
+        sys.stderr.write(
+            "配置文件不存在：%s\n"
+            "  在部署目录（含 config.env）内执行，或加 --config <部署目录>/config.env\n" % args.config
+        )
         return 1
 
-    cfg = load_config(os.path.abspath(args.config))
+    cfg_path = os.path.abspath(args.config)
+    cfg = load_config(cfg_path)
+    deploy_dir = os.path.dirname(cfg_path)
+    image_dir = os.path.abspath(os.path.join(deploy_dir, "..", ".."))
 
     p_hosts = split_nodes(cfg.get("PREFILL_NODES", ""))
     d_hosts = split_nodes(cfg.get("DECODE_NODES", ""))
@@ -104,11 +109,12 @@ def main():
     prefills = build_endpoints(p_hosts, p_base, p_local)
     decoders = build_endpoints(d_hosts, d_base, d_local)
 
-    script = find_proxy_script(args.proxy_script)
+    script = find_proxy_script(args.proxy_script, image_dir, deploy_dir)
     if script is None:
         sys.stderr.write(
             "未找到官方代理脚本 %s\n"
-            "  先执行： bash scripts/pd/fetch_official.sh\n" % PROXY_SCRIPT_NAME
+            "  先执行： bash ../../../../_shared/pd/fetch_official.sh\n"
+            "  （脚本会落到 %s/.tools/）\n" % (PROXY_SCRIPT_NAME, image_dir)
         )
         return 2
 

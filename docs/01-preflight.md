@@ -16,16 +16,24 @@
 
 ## 2. 一键预检
 
+预检脚本在 `_shared/`，每台部署机各跑一次（在部署目录内执行，脚本会自动取 `config.env`）：
+
 ```bash
-make init          # 生成 config/env
-vim config/env     # 填 MODEL_PATH / IMAGE / NIC_NAME
-make preflight     # 每台机器各跑一次
+cd <版本>/<模型>/<形态>     # 例：v0.30.0-a3/DeepSeek-V4.1-Flash/single
+vim config.env              # 填 MODEL_PATH / IMAGE / NIC_NAME
+bash ../../../_shared/preflight.sh
+```
+
+也可以从仓库根目录显式指定配置：
+
+```bash
+bash _shared/preflight.sh --config v0.30.0-a3/DeepSeek-V4.1-Flash/single/config.env
 ```
 
 多节点还可以加 `--all`：会 ssh 到其他节点探测 NPU 数与免密可用性（需先配好免密）。
 
 ```bash
-bash scripts/preflight.sh --all
+bash ../../../_shared/preflight.sh --all
 ```
 
 预检覆盖 11 类：发行版、NPU 与驱动、CANN、docker、权重与磁盘、内存与 `/dev/shm`、文件句柄、通信网卡、端口占用、跨节点连通性、代理环境变量。
@@ -87,8 +95,8 @@ free -g
 ## 5. 预检之后
 
 ```bash
-make up        # 拉起容器
-docker exec -it $(grep CONTAINER_NAME config/env | cut -d'"' -f2) bash
+bash ../../../_shared/start_container.sh        # 拉起容器
+docker exec -it $(grep CONTAINER_NAME config.env | cut -d'"' -f2) bash
 ```
 
 容器内再确认一次：

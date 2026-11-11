@@ -3,9 +3,11 @@
 # start_container.sh —— 拉起 vLLM Ascend 容器
 #
 # 用法：
-#   bash scripts/start_container.sh           # 后台常驻
-#   bash scripts/start_container.sh --shell   # 拉起后直接进入交互 shell
-#   bash scripts/start_container.sh --rebuild # 删除同名容器后重建
+#   cd <版本>/<模型>/<部署形态> && bash ../../../_shared/start_container.sh
+#   bash _shared/start_container.sh --config <部署目录>/config.env [--shell|--rebuild]
+#
+#   --shell    拉起后直接进入交互 shell
+#   --rebuild  删除同名容器后重建
 #
 # 说明：在裸 docker run 基础上补了现场必备的几项加固，见下方注释
 # =============================================================================
@@ -15,15 +17,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
-
 MODE="run"
-case "${1:-}" in
-    --shell) MODE="shell" ;;
-    --rebuild) MODE="rebuild" ;;
-    "") ;;
-    *) die "未知参数：$1（可选 --shell / --rebuild）" ;;
-esac
+CFG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --shell) MODE="shell"; shift ;;
+        --rebuild) MODE="rebuild"; shift ;;
+        -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+        *) die "未知参数：$1（可选 --config / --shell / --rebuild）" ;;
+    esac
+done
+
+load_config "$CFG"
 
 have docker || die "未安装 docker"
 [ -d "$MODEL_PATH" ] || die "权重目录不存在：$MODEL_PATH"

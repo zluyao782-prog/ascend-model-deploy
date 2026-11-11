@@ -3,9 +3,10 @@
 # stop.sh —— 停止服务 / 容器
 #
 # 用法：
-#   bash scripts/stop.sh            # 停容器（服务随之结束）
-#   bash scripts/stop.sh --services # 只杀 vllm / 代理进程，保留容器
-#   bash scripts/stop.sh --purge    # 停容器并删除（留下镜像）
+#   bash ../../../_shared/stop.sh              # 停容器（服务随之结束）
+#   bash ../../../_shared/stop.sh --services   # 只杀 vllm / 代理进程，保留容器
+#   bash ../../../_shared/stop.sh --purge      # 停容器并删除（留下镜像）
+#   可加 --config <部署目录>/config.env
 # =============================================================================
 set -uo pipefail
 
@@ -13,9 +14,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
+MODE="container"
+CFG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --services | services) MODE="services"; shift ;;
+        --purge | purge) MODE="purge"; shift ;;
+        -h | --help) sed -n '2,8p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
+    esac
+done
 
-MODE="${1:-container}"
+load_config "$CFG"
 
 if [ "$MODE" = "--services" ] || [ "$MODE" = "services" ]; then
     sect "停止推理服务（保留容器）"

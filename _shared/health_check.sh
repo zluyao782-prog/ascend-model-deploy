@@ -2,10 +2,9 @@
 # =============================================================================
 # health_check.sh —— 分层健康自检
 #
-# 用法：
-#   bash scripts/health_check.sh                # 单机
-#   bash scripts/health_check.sh --pd           # PD 全链路：40 个后端 + 代理 + 真实推理
-#   bash scripts/health_check.sh --pd --no-chat # 跳过推理请求
+# 用法（先在部署目录内执行，或显式 --config）：
+#   bash ../../../_shared/health_check.sh
+#   bash _shared/health_check.sh --config <部署目录>/config.env [--single|--pd] [--no-chat]
 #
 # 分层原则（现场最容易踩的坑）：
 #   1) 后端 /health  —— 引擎自身是否起来
@@ -20,18 +19,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
-
-MODE="$DEPLOY_MODE"
+CFG=""
+FORCE_MODE=""
 DO_CHAT=1
-for a in "$@"; do
-    case "$a" in
-        --pd) MODE="pd" ;;
-        --single) MODE="single" ;;
-        --no-chat) DO_CHAT=0 ;;
-        *) die "未知参数：$a" ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --pd) FORCE_MODE="pd"; shift ;;
+        --single) FORCE_MODE="single"; shift ;;
+        --no-chat) DO_CHAT=0; shift ;;
+        -h | --help) sed -n '2,12p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
     esac
 done
+
+load_config "$CFG"
+
+MODE="${FORCE_MODE:-$DEPLOY_MODE}"
 
 chat_test() {  # base_url model
     local url="$1" model="$2"

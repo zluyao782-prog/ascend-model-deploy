@@ -1,9 +1,9 @@
-# 现场配置与运行产物，不进版本库
-config/env
-.run/
+# 运行产物，不进版本库
 logs/
+.run/
 artifacts/
-.tools/*.py
+**/.tools/*.py
+**/.tools/*.sh
 
 # 权重（防止误把大文件放进工程目录）
 *.safetensors

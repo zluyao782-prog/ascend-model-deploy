@@ -3,8 +3,10 @@
 # collect_env.sh —— 一键采集环境快照（排错 / 反馈用）
 #
 # 用法：
-#   bash scripts/collect_env.sh              # 采集到 artifacts/env-<时间戳>.tar.gz
-#   bash scripts/collect_env.sh --nodes      # 额外 ssh 采集 P/D 其他节点（需免密）
+#   bash ../../../_shared/collect_env.sh            # 采集到 ./artifacts/env-<时间戳>.tar.gz
+#   bash _shared/collect_env.sh --config <部署目录>/config.env [--nodes]
+#
+#   --nodes  额外 ssh 采集 P/D 其他节点（需免密）
 #
 # 采集内容刻意避开权重正文与任何密钥，只收版本、拓扑、日志片段。
 # =============================================================================
@@ -14,15 +16,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
+CFG=""
+ALL_NODES=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --nodes) ALL_NODES=1; shift ;;
+        -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
+    esac
+done
+
+load_config "$CFG"
 
 TS=$(date +%Y%m%d-%H%M%S)
-OUT="$AE_ROOT/artifacts/env-$TS"
+OUT="$AE_DEPLOY_DIR/artifacts/env-$TS"
 mkdir -p "$OUT"
 export OUT
-
-ALL_NODES=0
-[ "${1:-}" = "--nodes" ] && ALL_NODES=1
 
 grab() {  # 标题 命令...
     local title="$1"; shift
@@ -60,17 +70,15 @@ grab "dmesg 尾"        bash -c 'dmesg 2>/dev/null | tail -50'
 # 进程与日志片段
 grab "vllm 进程" bash -c 'ps -eo pid,etime,rss,cmd | grep -E "vllm|launch_online_dp|load_balance_proxy" | grep -v grep'
 
-for f in "$AE_ROOT"/logs/*.log "$AE_ROOT"/.run/*/log/*.log; do
+for f in "$AE_DEPLOY_DIR"/logs/*.log "$AE_DEPLOY_DIR"/.run/*/log/*.log; do
     [ -f "$f" ] || continue
-    cp -f "$f" "$OUT/$(echo "${f#$AE_ROOT/}" | tr '/' '_')" 2>/dev/null || true
+    cp -f "$f" "$OUT/$(echo "${f#$AE_DEPLOY_DIR/}" | tr '/' '_')" 2>/dev/null || true
 done
 
 # 配置（脱敏：去掉可能含 token/password 的行后缀）
 if [ -f "$AE_CONFIG" ]; then
     sed -E 's/(TOKEN|PASSWORD|SECRET|KEY)=.*/\1=***/I' "$AE_CONFIG" >"$OUT/config.sanitized" 2>/dev/null || true
 fi
-
-cp -f "$AE_ROOT/config/env.example" "$OUT/" 2>/dev/null || true
 
 # 其他节点
 if [ "$ALL_NODES" = "1" ] && [ "$DEPLOY_MODE" = "pd" ]; then
@@ -84,8 +92,8 @@ if [ "$ALL_NODES" = "1" ] && [ "$DEPLOY_MODE" = "pd" ]; then
     done
 fi
 
-TAR="$AE_ROOT/artifacts/env-$TS.tar.gz"
-tar -czf "$TAR" -C "$AE_ROOT/artifacts" "env-$TS" 2>/dev/null || die "打包失败"
+TAR="$AE_DEPLOY_DIR/artifacts/env-$TS.tar.gz"
+tar -czf "$TAR" -C "$AE_DEPLOY_DIR/artifacts" "env-$TS" 2>/dev/null || die "打包失败"
 rm -rf "$OUT"
 
 ok "快照： $TAR"

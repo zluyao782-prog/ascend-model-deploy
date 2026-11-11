@@ -85,7 +85,7 @@ KV cache   ≈ 2 × 层数 × 隐藏维度 × 序列长度 × 并发数 × 字�
 
 ```bash
 # 1. 服务面
-bash scripts/health_check.sh
+bash ../../../_shared/health_check.sh
 
 # 2. 单轮问答（最简）
 # 3. 多轮（验证 KV / prefix cache）
@@ -94,17 +94,23 @@ bash scripts/health_check.sh
 
 再加一项**并发压力下的稳定性**：至少跑 10 分钟持续请求，观察显存是否爬升。显存随时间单调上涨 = 有泄漏或 KV 回收不正常，这类问题只在长时间跑后暴露。
 
-## 7. 新增一个模型适配目录
+## 7. 在仓库里新增一个模型目录
 
-以 `examples/` 下现有案例为模板：
+从骨架模板复制到对应镜像版本下：
 
 ```bash
-mkdir -p examples/<模型名>
-cp examples/deepseek-v41-flash/env.example examples/<模型名>/env.example
-# 改 MODEL_PATH / IMAGE / 拓扑 / 关键参数
+cp -r _template/vX.Y.Z-hw/ModelName v0.30.0-a3/<新模型名>
+cd v0.30.0-a3/<新模型名>
+grep -rn TODO .                          # 逐个替换
+vim single/config.env                    # 单机形态
+vim pd-NpMd/config.env                   # 组网形态
 ```
 
-`env.example` 只放该模型的差异项，公共项继承 `config/env.example` 的语义。同时在 `examples/<模型名>/README.md` 记三件事：
+组网形态的 `run_dp_template_p.sh` / `run_dp_template_d.sh` 需要按模型补私有参数，从 `v0.30.0-a3/DeepSeek-V4.1-Flash/pd-2p2d/` 复制后改。
+
+`config.env` 只放**这一次部署**的差异项（权重路径、拓扑、端口、模型私有参数），通用逻辑与公共默认值由 `_shared/` 与模板提供。
+
+`<模型>/README.md` 必须写全六节，其中三件最重要：
 
 1. 验证过的硬件与镜像版本（**精确到 tag**）
 2. 关键参数及为什么这么设
@@ -119,4 +125,4 @@ cp examples/deepseek-v41-flash/env.example examples/<模型名>/env.example
 - [ ] 长上下文请求成功
 - [ ] 并发压测 10 分钟无显存爬升
 - [ ] `collect_env.sh` 快照归档
-- [ ] 该模型的 `examples/` 目录已补齐并说明版本
+- [ ] `<模型>/README.md` 六节齐全、版本精确到 tag

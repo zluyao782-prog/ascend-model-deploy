@@ -29,10 +29,24 @@ hint()  { printf '       %s↳ %s%s\n' "$C_YEL" "$*" "$C_RST"; }
 sect()  { printf '\n%s== %s ==%s\n' "$C_BLD" "$*" "$C_RST"; }
 
 # ---------- 配置加载 ----------
+# 用法： load_config                  # 取 ./config.env（部署目录内执行）
+#        load_config <path>           # 显式指定
+#        AE_CONFIG=<path> load_config
 load_config() {
-    AE_CONFIG="${AE_CONFIG:-$AE_ROOT/config/env}"
-    [ -f "$AE_CONFIG" ] || die "配置文件缺失：$AE_CONFIG
-       先执行： cp config/env.example config/env && vim config/env"
+    local cfg="${1:-${AE_CONFIG:-}}"
+    if [ -z "$cfg" ] && [ -f ./config.env ]; then
+        cfg="$PWD/config.env"
+    fi
+    if [ -z "$cfg" ]; then
+        die "未找到配置文件
+       在部署目录内执行（目录下有 config.env），或显式指定：
+         bash _shared/preflight.sh --config <部署目录>/config.env"
+    fi
+    [ -f "$cfg" ] || die "配置文件不存在：$cfg"
+    AE_CONFIG="$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")"
+    export AE_CONFIG
+    AE_DEPLOY_DIR="$(dirname "$AE_CONFIG")"
+    export AE_DEPLOY_DIR
 
     set -a
     # shellcheck disable=SC1090

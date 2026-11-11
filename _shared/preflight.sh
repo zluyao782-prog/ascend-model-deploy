@@ -3,8 +3,10 @@
 # preflight.sh —— 部署前环境体检
 #
 # 用法：
-#   bash scripts/preflight.sh            # 本机体检
-#   bash scripts/preflight.sh --all       # 本机 + 跨节点用 ssh 探测（需已配免密）
+#   cd <版本>/<模型>/<部署形态> && bash ../../../_shared/preflight.sh
+#   bash _shared/preflight.sh --config v0.30.0-a3/DeepSeek-V4.1-Flash/single/config.env
+#
+#   --all   额外 ssh 探测其他节点（需已配免密）
 #
 # 退出码：0 全部通过（警告不算失败）；1 存在 FAIL 项
 # 原则：能在部署前发现的问题，绝不留到压测现场
@@ -15,10 +17,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${SCRIPT_DIR}/lib/common.sh"
 
-load_config
-
 CHECK_ALL=0
-[ "${1:-}" = "--all" ] && CHECK_ALL=1
+CFG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --config) CFG="${2:-}"; shift 2 ;;
+        --all) CHECK_ALL=1; shift ;;
+        -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+        *) die "未知参数：$1" ;;
+    esac
+done
+
+load_config "$CFG"
 
 printf '%s昇腾部署预检%s  模式=%s  模型=%s\n' "$C_BLD" "$C_RST" "$DEPLOY_MODE" "${MODEL_NAME:-$SERVED_MODEL_NAME}"
 

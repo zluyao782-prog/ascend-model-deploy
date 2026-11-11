@@ -9,7 +9,7 @@ Prefill（算 prompt，吃算力）与 Decode（逐 token 生成，吃显存带�
 先定三件事：**几个 P、几个 D、每组每台跑几个引擎**。
 
 ```bash
-# config/env
+# config.env
 DEPLOY_MODE="pd"
 
 PREFILL_NODES="10.0.0.11 10.0.0.12"   # 顺序 = DP rank 顺序，第一台是 P 组协调节点
@@ -46,7 +46,7 @@ PROXY_PORT=1999
 `launch_online_dp.py`（多机 DP 启动器）与 `load_balance_proxy_server_example.py`（代理）随镜像分发，不随本项目提交（避免版本漂移）：
 
 ```bash
-bash scripts/pd/fetch_official.sh
+bash ../../../../_shared/pd/fetch_official.sh
 ```
 
 脚本会在容器内 `find` 定位并复制到 `.tools/`。若定位失败，可手工确认镜像内路径：
@@ -65,14 +65,14 @@ Decode 全组  →  Prefill 全组  →  Proxy
 
 ```bash
 # 每个 Decode 节点各执行（按节点顺序，D1 先）
-make pd-d
+bash ./start_d.sh
 
 # 每个 Prefill 节点各执行（P1 先）
-make pd-p
+bash ./start_p.sh
 
 # 代理节点
-python3 scripts/pd/start_proxy.py --dry-run    # 先核对端点数量
-make proxy
+bash ./start_proxy.sh --dry-run    # 先核对端点数量
+bash ./start_proxy.sh -d
 ```
 
 每台机器执行 `start_role.sh` 时会自动：
@@ -107,7 +107,7 @@ tail -f .run/decode/log/decode.log
 ## 5. 代理与端点
 
 ```bash
-python3 scripts/pd/start_proxy.py --dry-run
+bash ./start_proxy.sh --dry-run
 ```
 
 输出会列出端点总数，应与 `DP_LOCAL × 节点数` 对上：
@@ -122,7 +122,7 @@ python3 scripts/pd/start_proxy.py --dry-run
 ## 6. 验证
 
 ```bash
-bash scripts/health_check.sh --pd
+bash ../../../_shared/health_check.sh --pd
 ```
 
 四层，逐层过：
@@ -153,7 +153,7 @@ PCP（`--prefill-context-parallel-size`）只由启动参数表达，**不要**�
 
 只动两处：
 
-1. `config/env` 里的 `*_NODES`、`*_DP_LOCAL`、`*_TP`、`*_PCP`；
+1. `config.env` 里的 `*_NODES`、`*_DP_LOCAL`、`*_TP`、`*_PCP`；
 2. 如果单机卡数变了（比如从 16 卡换 8 卡），调整 `*_DP_LOCAL` 使其乘 TP 等于卡数。
 
 `start_role.sh` 的 rank 推导、`start_proxy.py` 的端点数都是算出来的，不需要改脚本。
@@ -161,9 +161,9 @@ PCP（`--prefill-context-parallel-size`）只由启动参数表达，**不要**�
 ## 9. 收尾
 
 ```bash
-bash scripts/stop.sh --services     # 停服务保留容器
-bash scripts/stop.sh                # 停容器
-bash scripts/stop.sh --purge        # 删容器
+bash ../../../_shared/stop.sh --services     # 停服务保留容器
+bash ../../../_shared/stop.sh                # 停容器
+bash ../../../_shared/stop.sh --purge        # 删容器
 ```
 
 残留进程会占住 7100 起的端口，下次启动会在 `start_role.sh` 的端口检查处被拦下 —— 这是设计如此，比让引擎在初始化一半时因端口冲突退出更好查。

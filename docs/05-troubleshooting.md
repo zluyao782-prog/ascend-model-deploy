@@ -1,6 +1,6 @@
 # 05 排错手册
 
-按「现象 → 大概率原因 → 怎么确认 → 怎么修」组织。现场先做一件事：**先跑 `bash scripts/collect_env.sh` 留证据**，再动手改。改完说不清改动前后差异的排错，等于重来一遍。
+按「现象 → 大概率原因 → 怎么确认 → 怎么修」组织。现场先做一件事：**先跑 `bash ../../../_shared/collect_env.sh` 留证据**，再动手改。改完说不清改动前后差异的排错，等于重来一遍。
 
 ## 快速分流
 
@@ -39,7 +39,7 @@ docker logs <容器名> --tail 50
 | `no such file: /dev/davinci0` | 宿主机驱动未装或未重启 | 装驱动后 `reboot`，`npu-smi info` 先能跑 |
 | `permission denied` 挂载驱动 | 未加 `--privileged` | 脚本已带，手动改过命令的要补回 |
 | `cannot mount /usr/local/Ascend/driver` | 路径不存在 | 确认驱动安装路径，或让脚本跳过该挂载 |
-| 无报错但 `Exited (0)` | 命令是 `sleep infinity` 被改写 | 用 `bash scripts/start_container.sh` 标准命令 |
+| 无报错但 `Exited (0)` | 命令是 `sleep infinity` 被改写 | 用 `bash ../../../_shared/start_container.sh` 标准命令 |
 
 ### A2 HCCL 建链失败（多机）
 
@@ -94,7 +94,7 @@ docker exec <容器> ss -lnt | grep 7100
 
 **原因**
 
-- 端口被上一次的残留进程占着 → `bash scripts/stop.sh --services`
+- 端口被上一次的残留进程占着 → `bash ../../../_shared/stop.sh --services`
 - 服务只监听 127.0.0.1 → 启动参数需 `--host 0.0.0.0`
 - 容器用了 bridge 网络而 PD 需要跨机直连 → 用 `--network=host`
 
@@ -116,7 +116,7 @@ docker exec <容器> ss -lnt | grep 7100
 
 ```bash
 # 1. 逐个后端
-bash scripts/health_check.sh --pd
+bash ../../../_shared/health_check.sh --pd
 # 只要有一个后端不是 OK，问题就不在代理
 
 # 2. 后端全绿后再看代理
@@ -192,7 +192,7 @@ free -g
 
 ## D. 排错纪律
 
-1. **先留证据再动手**：`bash scripts/collect_env.sh`，改之前的现场是唯一的一份。
+1. **先留证据再动手**：`bash ../../../_shared/collect_env.sh`，改之前的现场是唯一的一份。
 2. **一次只改一个变量**：同时改三处然后好了，等于什么都没学到。
 3. **区分「必然失败」与「偶发」**：偶发问题优先怀疑资源竞争与超时，不要从代码逻辑猜。
 4. **记下来**：修完把现象与根因补进本文档。同一个坑踩两次是浪费，第三次是事故。
