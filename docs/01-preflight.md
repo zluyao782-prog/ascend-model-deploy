@@ -9,7 +9,7 @@
 | 服务器 | Atlas 800 训练/推理服务器（A2 或 A3） | `npu-smi info -l` 能看到卡 |
 | 驱动 + 固件 | 与 CANN 版本配套，**驱动版本升级后必须重启** | `cat /usr/local/Ascend/driver/version.info` |
 | CANN | 与 vLLM Ascend 镜像内版本匹配 | `cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg` |
-| 容器 | Docker 20.10+，daemon 可访问 | `docker info` |
+| 容器 | Docker 20.10+，daemon 可访问；**镜像已 `docker load` 到本地**（内网无法 pull） | `docker info`、`docker images \| grep vllm-ascend` |
 | 通信 | 多机需 RoCE/HCCS 业务网口互通，MTU ≥ 4200 | `hccn_tool -i 0 -link -g` |
 
 **版本搭配的原则**：镜像 tag 决定了 CANN 与 vLLM Ascend 的版本，宿主机驱动必须是该 CANN 支持的版本。驱动高于要求通常可以，低于要求会出现「容器里设备数量正常但初始化报错」。
@@ -95,8 +95,13 @@ free -g
 ## 5. 预检之后
 
 ```bash
-bash ../../../_shared/start_container.sh        # 拉起容器
-docker exec -it $(grep CONTAINER_NAME config.env | cut -d'"' -f2) bash
+bash ./start.sh        # 在 single/ 或 pd-2p2d/ 目录内：检查 → 起容器 → 跟日志
+```
+
+容器由 `start.sh` 自己拉起（挂载、ulimit、设备节点都在脚本里逐行列着）。要进容器看现场：
+
+```bash
+docker exec -it <CONTAINER_NAME> bash
 ```
 
 容器内再确认一次：

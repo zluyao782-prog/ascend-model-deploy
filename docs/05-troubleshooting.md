@@ -39,7 +39,7 @@ docker logs <容器名> --tail 50
 | `no such file: /dev/davinci0` | 宿主机驱动未装或未重启 | 装驱动后 `reboot`，`npu-smi info` 先能跑 |
 | `permission denied` 挂载驱动 | 未加 `--privileged` | 脚本已带，手动改过命令的要补回 |
 | `cannot mount /usr/local/Ascend/driver` | 路径不存在 | 确认驱动安装路径，或让脚本跳过该挂载 |
-| 无报错但 `Exited (0)` | 命令是 `sleep infinity` 被改写 | 用 `bash ../../../_shared/start_container.sh` 标准命令 |
+| 无报错但 `Exited (0)` | 启动命令被改过（不是 `serve.sh`） | 用 `bash start.sh` 起，不要手改 `docker run` |
 
 ### A2 HCCL 建链失败（多机）
 
@@ -60,7 +60,7 @@ for i in $(seq 0 7); do hccn_tool -i $i -link -g; done
 
 **修复**
 
-- `nofile` 小 → 重建容器（`start_container.sh` 已带 `--ulimit nofile=1048576:1048576`）
+- `nofile` 小 → `bash stop.sh` 后重新 `bash start.sh`（脚本已带 `--ulimit nofile=1048576:1048576`）
 - 网卡填错 → 改 `NIC_NAME`，必须是有对端网段的业务口，不是管理口
 - 驱动版本不一 → 多机驱动/固件版本必须一致，逐台核对 `version.info`
 - 防火墙拦了 12321 / 30000-30031 → 放开 TCP
@@ -94,7 +94,7 @@ docker exec <容器> ss -lnt | grep 7100
 
 **原因**
 
-- 端口被上一次的残留进程占着 → `bash ../../../_shared/stop.sh --services`
+- 端口被上一次的残留进程占着 → `bash stop.sh`
 - 服务只监听 127.0.0.1 → 启动参数需 `--host 0.0.0.0`
 - 容器用了 bridge 网络而 PD 需要跨机直连 → 用 `--network=host`
 
@@ -116,7 +116,7 @@ docker exec <容器> ss -lnt | grep 7100
 
 ```bash
 # 1. 逐个后端
-bash ../../../_shared/health_check.sh --pd
+bash check.sh
 # 只要有一个后端不是 OK，问题就不在代理
 
 # 2. 后端全绿后再看代理

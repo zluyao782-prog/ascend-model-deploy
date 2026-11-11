@@ -84,8 +84,8 @@ KV cache   ≈ 2 × 层数 × 隐藏维度 × 序列长度 × 并发数 × 字�
 ## 6. 部署后必须做的四项验证
 
 ```bash
-# 1. 服务面
-bash ../../../_shared/health_check.sh
+# 1. 服务面（三层：/health → /v1/models → 真实推理）
+bash check.sh
 
 # 2. 单轮问答（最简）
 # 3. 多轮（验证 KV / prefix cache）
@@ -96,19 +96,20 @@ bash ../../../_shared/health_check.sh
 
 ## 7. 在仓库里新增一个模型目录
 
-从骨架模板复制到对应镜像版本下：
+**复制一个已经跑通的模型目录**，不要从零写：
 
 ```bash
-cp -r _template/vX.Y.Z-hw/ModelName v0.30.0-a3/<新模型名>
+cp -r v0.30.0-a3/DeepSeek-V4.1-Flash v0.30.0-a3/<新模型名>
 cd v0.30.0-a3/<新模型名>
-grep -rn TODO .                          # 逐个替换
-vim single/config.env                    # 单机形态
-vim pd-NpMd/config.env                   # 组网形态
+vim single/config.env                  # 权重路径 / 拓扑 / 端口
+vim single/serve.sh                    # 模型参数（tokenizer / parser / 量化 / 投机解码）
+vim pd-2p2d/config.env                 # 节点 IP / 拓扑
+vim pd-2p2d/run_p.sh pd-2p2d/run_d.sh  # 两侧各自的模型参数
 ```
 
-组网形态的 `run_dp_template_p.sh` / `run_dp_template_d.sh` 需要按模型补私有参数，从 `v0.30.0-a3/DeepSeek-V4.1-Flash/pd-2p2d/` 复制后改。
+`start.sh` / `check.sh` / `stop.sh` 与模型无关，**原样保留**——它们只读 `config.env` 和那几个常量。
 
-`config.env` 只放**这一次部署**的差异项（权重路径、拓扑、端口、模型私有参数），通用逻辑与公共默认值由 `_shared/` 与模板提供。
+`config.env` 只放**这一次部署**的差异项（权重路径、节点 IP、拓扑、端口），模型参数放 `serve.sh` / `run_*.sh`，两边不要混。
 
 `<模型>/README.md` 必须写全六节，其中三件最重要：
 
@@ -121,7 +122,8 @@ vim pd-NpMd/config.env                   # 组网形态
 ## 8. 交付前的最后一遍
 
 - [ ] `preflight.sh` 全绿（WARN 项有合理解释）
-- [ ] `health_check.sh` 四层通过
+- [ ] `check.sh` 退出码 0（含真实推理）
+- [ ] 内网环境（无外网）下全程无联网动作
 - [ ] 长上下文请求成功
 - [ ] 并发压测 10 分钟无显存爬升
 - [ ] `collect_env.sh` 快照归档

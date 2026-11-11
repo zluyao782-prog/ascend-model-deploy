@@ -83,28 +83,6 @@ port_busy() {
     ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"
 }
 
-http_get() {
-    curl --noproxy '*' -fsS -m "${2:-5}" "$1" 2>/dev/null
-}
-
-http_code() {
-    curl --noproxy '*' -s -o /dev/null -w '%{http_code}' -m "${2:-5}" "$1" 2>/dev/null
-}
-
-wait_http() {  # url timeout_s label
-    local url="$1" t="${2:-60}" label="${3:-$url}" i=0
-    while [ "$i" -lt "$t" ]; do
-        if http_get "$url" 3 >/dev/null; then
-            ok "$label"
-            return 0
-        fi
-        i=$((i + 3))
-        sleep 3
-    done
-    err "$label（等待 ${t}s 未就绪）"
-    return 1
-}
-
 # 列表工具：把 "a b c" 按行展开
 list_lines() {
     local s="${1:-}"
@@ -124,19 +102,4 @@ summary() {
         "$C_YEL" "$AE_WARN" "$C_RST" \
         "$C_RED" "$AE_FAIL" "$C_RST"
     [ "$AE_FAIL" -eq 0 ] || exit 1
-}
-
-# ---------- 容器内/外执行 ----------
-# 若当前环境本身有 vllm（已在容器内），直接执行；否则 docker exec 进容器
-in_env() {
-    if have vllm; then
-        "$@"
-        return
-    fi
-    local ct="${CONTAINER_NAME:-ascend-deploy}"
-    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$ct" \
-        || die "容器 $ct 未运行，先执行： make up"
-    local cmd
-    cmd=$(printf '%q ' "$@")
-    docker exec -i "$ct" bash -lc "$cmd"
 }

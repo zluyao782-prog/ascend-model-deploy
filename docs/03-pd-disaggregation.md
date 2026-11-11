@@ -10,8 +10,6 @@ Prefill（算 prompt，吃算力）与 Decode（逐 token 生成，吃显存带�
 
 ```bash
 # config.env
-DEPLOY_MODE="pd"
-
 PREFILL_NODES="10.0.0.11 10.0.0.12"   # 顺序 = DP rank 顺序，第一台是 P 组协调节点
 DECODE_NODES="10.0.0.21 10.0.0.22"
 PROXY_NODE=""                          # 留空则用 P 组第一台
@@ -30,7 +28,7 @@ KV_CONSUMER_PORT=30100
 PROXY_PORT=1999
 ```
 
-全局 DP 由脚本计算：`DP_LOCAL × 节点数`。上例即 P: DP8、D: DP32，与 `2P2D` 的 4 台 A3（16 卡/台）刚好填满。
+全局 DP 由 `config.env` 自动算：`DP_LOCAL × 节点数`。上例即 P: DP8、D: DP32，与 `2P2D` 的 4 台 A3（16 卡/台）刚好填满。
 
 ### 常见拓扑配比
 
@@ -41,19 +39,22 @@ PROXY_PORT=1999
 | 长 prompt、短输出 | 3 台 | 1 台 | P 多、D 少 |
 | 单机可容纳 | 不拆 | | 直接用单机模式，PD 的代理与 KV 传输都是额外开销 |
 
-## 2. 首次准备：提取官方脚本
+## 2. 官方脚本：从镜像里执行，不落仓库
 
-`launch_online_dp.py`（多机 DP 启动器）与 `load_balance_proxy_server_example.py`（代理）随镜像分发，不随本项目提交（避免版本漂移）：
+`launch_online_dp.py`（多机 DP 启动器）与 `load_balance_proxy_server_example.py`（代理）随镜像分发。抄进仓库就会随镜像版本漂移，所以 `start.sh` 直接执行镜像内的路径：
 
-```bash
-bash ../../../../_shared/pd/fetch_official.sh
+```
+/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/launch_online_dp.py
+/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py
 ```
 
-脚本会在容器内 `find` 定位并复制到 `.tools/`。若定位失败，可手工确认镜像内路径：
+`start.sh` 启动前会先 `docker run --rm "$IMAGE" test -f` 确认文件在。换镜像版本后路径变了，它会明确提示并给出查找命令：
 
 ```bash
-docker exec -it <容器> bash -lc 'find / -name launch_online_dp.py 2>/dev/null'
+docker run --rm $IMAGE find / -name launch_online_dp.py
 ```
+
+确认后改 `start.sh` 顶部那两行即可，不需要额外"提取脚本"的步骤。
 
 ## 3. 启动顺序（不可颠倒）
 
@@ -65,64 +66,57 @@ Decode 全组  →  Prefill 全组  →  Proxy
 
 ```bash
 # 每个 Decode 节点各执行（按节点顺序，D1 先）
-bash ./start_d.sh
+bash start.sh decode
 
 # 每个 Prefill 节点各执行（P1 先）
-bash ./start_p.sh
+bash start.sh prefill
 
 # 代理节点
-bash ./start_proxy.sh --dry-run    # 先核对端点数量
-bash ./start_proxy.sh -d
+bash start.sh proxy
 ```
 
-每台机器执行 `start_role.sh` 时会自动：
-
-1. 用 `hostname -I` 匹配本机属于哪个角色、第几台；
-2. 推导本机 `dp-rank-start`（前序节点 `DP_LOCAL` 累加）；
-3. 把对应角色模板放到 `.run/<role>/run_dp_template.sh`；
-4. 调官方 launcher 拉起本地 `DP_LOCAL` 个引擎。
-
-想看它们算得对不对，启动前先看打印的拓扑块：
+每台机器执行时，`start.sh` 会先打印它算出来的拓扑，**启动前先核对这三行**：
 
 ```
-== prefill 节点启动 ==
-   本机 IP        : 10.0.0.12 （prefill 组第 2/2 台）
-   全局 DP        : 8（本地 4/台 × 2 台）
-   本机 rank 区间 : 4 - 7
-   TP / PCP       : 1 / 4
-   DP 协调地址    : 10.0.0.11:12321
+本机 IP     : 10.0.0.12（prefill 组第 2 / 2 台）
+全局 DP     : 8（每台 4 个引擎）
+本机 rank   : 4 - 7
 ```
+
+算错就说明 `config.env` 的节点列表或 `NIC_NAME` 有问题——本机 IP 不在列表里会直接报错退出，不会带着错误 rank 启动。
 
 ## 4. 等待就绪
 
-大模型加载 + 图捕获耗时长，**单个引擎初始化上限 `VLLM_ENGINE_READY_TIMEOUT_S=36000`（10 小时）是官方给的兜底值，不要调小**。
+大模型加载 + 图捕获耗时长，**`VLLM_ENGINE_READY_TIMEOUT_S=36000`（10 小时）是官方给的兜底值，不要调小**。
+
+判定标准：**每个 rank 都打印 `Application startup complete.`**。32 个 Decode 引擎就要看到 32 条：
 
 ```bash
-tail -f .run/prefill/log/prefill.log
-tail -f .run/decode/log/decode.log
+docker logs dsv41-pd 2>&1 | grep -c 'Application startup complete'
 ```
-
-判定标准：**每个 rank 都打印 `Application startup complete.`**。32 个 Decode 引擎就要看到 32 条。
 
 ## 5. 代理与端点
 
 ```bash
-bash ./start_proxy.sh --dry-run
+bash start.sh proxy
 ```
 
-输出会列出端点总数，应与 `DP_LOCAL × 节点数` 对上：
+它做两件事：
+
+1. **就绪闸**：逐个检查 P 的 8 个 + D 的 32 个后端 `/health`，有一个没起来就拒绝启动。
+2. **端点等长**：按 `DP_LOCAL × 节点数` 生成列表，并打印数量核对：
 
 ```
-[proxy] prefill  : 8 个端点  ['10.0.0.11', '10.0.0.12']  (2 台 × 4)
-[proxy] decode   : 32 个端点 ['10.0.0.21', '10.0.0.22']  (2 台 × 16)
+Prefill 端点 : 8 个（2 台 × 4）
+Decode 端点  : 32 个（2 台 × 16）
 ```
 
-端点数量对不上就是配置错了，**不要带着错的数量去启动** —— 官方代理要求 host 与 port 列表严格等长，不等长会直接退出。
+官方代理要求 host 与 port 列表严格等长，不等长会直接退出。**端点数量对不上就是配置错了，不要带着错的数量去启动。**
 
 ## 6. 验证
 
 ```bash
-bash ../../../_shared/health_check.sh --pd
+bash check.sh
 ```
 
 四层，逐层过：
@@ -134,7 +128,7 @@ bash ../../../_shared/health_check.sh --pd
 | 3 | `/v1/models` | 服务面正常暴露 |
 | 4 | 真实 chat 请求 | 唯一能证明 KV 传输链路通的一步 |
 
-> 第 2 层是最大的陷阱：代理 `/healthcheck` 返回 200 但请求挂住，几乎都是后端没全绿或 KV 端口被防火墙拦。所以脚本在第 1 层有异常时直接跳过第 4 层，避免干等。
+> 第 2 层是最大的陷阱：代理 `/healthcheck` 返回 200 但请求挂住，几乎都是后端没全绿或 KV 端口被防火墙拦。
 
 ## 7. 参数一致性约束
 
@@ -147,23 +141,21 @@ bash ../../../_shared/health_check.sh --pd
 }
 ```
 
-PCP（`--prefill-context-parallel-size`）只由启动参数表达，**不要**写进 connector 的 `tp_size`。这是排错时最容易被误改的一处。
+这两组数在 `run_p.sh` / `run_d.sh` 里都由 `config.env` 的 `P_DP_SIZE` / `D_DP_SIZE` 自动代入，**不要手改成别的值**。PCP（`--prefill-context-parallel-size`）只由启动参数表达，不要写进 connector 的 `tp_size`。这是排错时最容易被误改的一处。
 
 ## 8. 换拓扑怎么改
 
-只动两处：
+只动 `config.env` 两处：
 
-1. `config.env` 里的 `*_NODES`、`*_DP_LOCAL`、`*_TP`、`*_PCP`；
-2. 如果单机卡数变了（比如从 16 卡换 8 卡），调整 `*_DP_LOCAL` 使其乘 TP 等于卡数。
+1. `*_NODES` 节点列表（顺序即 rank 顺序）；
+2. `*_DP_LOCAL` 使其乘 `*_TP × *_PCP` 等于单台卡数。
 
-`start_role.sh` 的 rank 推导、`start_proxy.py` 的端点数都是算出来的，不需要改脚本。
+rank 推导、全局 DP、端点数都是算出来的，脚本不用改。
 
 ## 9. 收尾
 
 ```bash
-bash ../../../_shared/stop.sh --services     # 停服务保留容器
-bash ../../../_shared/stop.sh                # 停容器
-bash ../../../_shared/stop.sh --purge        # 删容器
+bash stop.sh
 ```
 
-残留进程会占住 7100 起的端口，下次启动会在 `start_role.sh` 的端口检查处被拦下 —— 这是设计如此，比让引擎在初始化一半时因端口冲突退出更好查。
+残留的容器会占住 7100 起的端口，下次 `start.sh` 会在端口检查处拦下来 —— 这是设计如此，比让引擎初始化到一半因端口冲突退出更好查。

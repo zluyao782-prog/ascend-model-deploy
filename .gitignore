@@ -2,8 +2,6 @@
 logs/
 .run/
 artifacts/
-**/.tools/*.py
-**/.tools/*.sh
 
 # 权重（防止误把大文件放进工程目录）
 *.safetensors
@@ -20,3 +18,6 @@ Thumbs.db
 .idea/
 __pycache__/
 *.pyc
+
+# 本地 Agent 工作区（记忆、会话数据，仅本机使用）
+.workbuddy/
