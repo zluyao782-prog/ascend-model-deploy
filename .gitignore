@@ -1,0 +1,22 @@
+# 现场配置与运行产物，不进版本库
+config/env
+.run/
+logs/
+artifacts/
+.tools/*.py
+
+# 权重（防止误把大文件放进工程目录）
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+__pycache__/
+*.pyc
