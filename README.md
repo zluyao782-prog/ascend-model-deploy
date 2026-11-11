@@ -1,313 +1,231 @@
-# 昇腾模型部署脚本库
+# 昇腾模型部署脚本
 
-团队共享的 **vLLM Ascend 部署脚本与实战记录**。一个镜像版本一个目录，版本下面按模型分，模型下面按部署形态（单机 / 组网）分，形态目录里是可以直接跑、也可以整目录复制到现场的脚本。
+团队自己在用的 vLLM Ascend 部署脚本和现场记录。一个镜像版本一个目录，下面按模型分，模型下面按部署形态（单机 / 组网）分。形态目录里的东西可以整包拷到现场直接用。
 
-解决的问题很实际：同一个模型每换一次现场就重写一遍脚本，同一个坑每个人踩一遍。这里的原则是——**脚本只写一次，经验写进 README，坑写进排错文档**。
+做这个仓库的原因很朴素：同一个模型，每换一个现场就得重写一遍脚本；同一个坑，每个人轮流踩。现在分工很清楚：脚本写一次放这儿，经验写进各自 README，排错路径写进 docs。
 
-## 三条写脚本的原则
-
-现场执行的是一线同事，不是专职脚本开发。所以：
-
-1. **一个文件只做一件事，命令写在能看见的地方。** `serve.sh` / `run_p.sh` / `run_d.sh` 里就是那条 `vllm serve`，参数逐行列出来，不藏在函数和变量拼接里。改参数就改这几行。
-2. **配置只描述"这一次部署"。** 权重路径、节点 IP、拓扑、端口放 `config.env`；通用逻辑不写进配置，模型参数不写进配置。
-3. **不联网、不猜、不半路失败。** 内网环境没有外网：不 `docker pull`、不下载、不 `pip install`。所有前置条件在脚本开头一次性检查完，缺什么就直接说缺什么，不要跑到一半才报网络错误。
-
-不需要 `make`，不需要记命令别名。每个目录就四五个 `.sh`，`bash start.sh` 是最长的命令。
-
-## 目录约定
+## 目录长这样
 
 ```
 ascend-model-deploy/
-├── README.md                     本文件：规则总纲
-├── CONTRIBUTING.md               提交规范与评审清单
-├── _shared/                      可选工具：上现场前的环境体检与证据采集（不参与部署）
-├── docs/                         通用知识：预检、调优、排错、模型接入
-├── skills/                       Agent 可加载的流程封装（只路由，不含实现）
-│
-└── <镜像版本>/                    例：v0.30.0-a3
-    ├── README.md                 该版本的版本信息与模型清单
-    └── <模型名>/                  例：DeepSeek-V4.1-Flash
-        ├── README.md             ★ 该模型的部署讲解（必填）
-        ├── single/               单机形态
-        │   ├── config.env        现场唯一要改的文件
-        │   ├── serve.sh          那条 vllm serve 命令
-        │   ├── start.sh          检查 + 起容器 + 跟日志
-        │   ├── check.sh          服务能不能用
-        │   └── stop.sh
-        └── pd-2p2d/              组网形态（拓扑不同就再开一个目录）
-            ├── config.env
-            ├── start.sh          按角色起： prefill | decode | proxy
-            ├── run_p.sh          Prefill 单个引擎的命令
-            ├── run_d.sh          Decode 单个引擎的命令
-            ├── check.sh
-            └── stop.sh
+├── _shared/        上现场前的体检和证据采集（可选，不参与部署）
+├── docs/           通用知识：预检、调优、排错、接新模型
+├── skills/         给 Agent 用的流程封装，只有判断和约束，不含实现
+└── v0.30.0-a3/     一个镜像版本
+    ├── README.md
+    └── DeepSeek-V4.1-Flash/
+        ├── README.md
+        ├── single/   config.env  serve.sh  start.sh  check.sh  stop.sh
+        └── pd-2p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
 ```
 
-每个形态目录里的分工是固定的：
+进到某个形态目录，要改的基本只有 `config.env`。模型参数在 `serve.sh` / `run_p.sh` / `run_d.sh` 里，打开就是一条 `vllm serve`，参数一行一个。`start.sh`、`check.sh`、`stop.sh` 平时不用动。
 
-| 文件 | 谁来看 | 什么时候改 |
+## 两种形态
+
+| 目录 | 官方参考 | 要注意的地方 |
 |---|---|---|
-| `config.env` | 现场实施 | **每个现场都要改**：权重路径、节点 IP、拓扑、端口 |
-| `serve.sh` / `run_*.sh` | 调参的人 | 模型参数（parser、量化、投机解码、offload）变了才改 |
-| `start.sh` / `check.sh` / `stop.sh` | 基本不看 | 换机型、挂载方式变了才改，平时原样用 |
+| `single/` | 官方「单节点共置部署」 | 单机内 P/D 同进程共置，不是分离。不需要 KV 传输，不需要 RoCE |
+| `pd-<P>p<D>/` | `examples/disaggregated_prefill_v1/` | P、D 各自独立 dp/tp/pcp；走 Mooncake；proxy 端点列表长度必须等于 P+D 的实例数 |
+| `pd-colocated/`（如果要加） | 同 PD | 单机内分卡组，端口段不能重叠，`gpu-memory-utilization` 按卡算 |
 
-## 部署形态（禁止混用）
+有几个地方是栽过跟头的：
 
-形态目录名即拓扑声明，**不同形态的写法不得互相套用**：
+- 拓扑变了就新开目录。`pd-1p3d` 和 `pd-2p2d` 是两份资产，不要在一个 `config.env` 里加 `if`。
+- A2 和 A3 的镜像 tag 不通用，换硬件系列就新建版本目录。
+- `single/` 的参数是单机的最优解，搬到 PD 会掉性能，有些直接起不来。P 和 D 两侧同理。
 
-| 形态目录 | 官方参考位置 | 关键差异（必须在脚本中体现） |
-|---|---|---|
-| `single/` | 官方「单节点共置部署」章节 | 单机内 P/D 同进程共置，**不是分离**；不需要 KV 传输、不需要 RoCE；DP/TP 在同一台机器内划分 |
-| `pd-<P>p<D>/` | `examples/disaggregated_prefill_v1/` | P / D 各自独立 `dp` / `tp` / `pcp`；Mooncake KV 连接器；`PROMPT_DEVICE_ID` / `DECODE_DEVICE_ID`；proxy 端点列表长度必须等于 P+D 实例数 |
-| `pd-colocated/`（如新增） | 同 PD，单机内划分卡组 | 同机 P/D 分组，**端口段不得重叠**；`gpu-memory-utilization` 按卡算而非整机 |
+## 内网现场：先把镜像和权重搬进去
 
-几条硬约束：
+现场基本没有外网，脚本里也没有任何下载动作。这两样得提前准备好，否则卡在半路，报的错还跟真实原因没关系。
 
-- **拓扑变了就新开目录**，不要在同一个 `config.env` 里加 `if` 分支；`pd-1p1d` 与 `pd-2p2d` 是两份资产；
-- **A2 与 A3 镜像 tag 不通用**，换硬件系列新建版本目录，不要混用；
-- `single/` 里的参数集是单机最优解，直接搬到 PD 会掉性能甚至起不来；P / D 两侧同理，**不合并**。
-
-## 已收录
-
-| 镜像版本 | 硬件 | 模型 | 形态 |
-|---|---|---|---|
-| [v0.30.0-a3](v0.30.0-a3/) | Atlas 800 A3 | [DeepSeek-V4.1-Flash](v0.30.0-a3/DeepSeek-V4.1-Flash/) | 单机（16 卡）/ PD 2P2D（4 台） |
-
-## 内网部署：先准备镜像和权重
-
-现场没有外网，这两件事必须**提前**做完，脚本不会替你下载任何东西。
+镜像在有网的机器上导出，拷过去：
 
 ```bash
-# 1. 在有网的机器上导出镜像，拷到现场
 docker save quay.io/ascend/vllm-ascend:v0.30.0-a3 -o vllm-ascend-v0.30.0-a3.tar
-
-# 2. 每台现场机器导入（脚本会检查，没导入就停在这一步，不会去 pull）
-docker load -i vllm-ascend-v0.30.0-a3.tar
-docker images | grep vllm-ascend
-
-# 3. 权重预下载到宿主机，只读方式挂进容器（不要在容器里在线拉）
-#    ModelScope 下载时必须带 --revision，不要用默认 master
 ```
 
-权重目录要求：**每台机器同一绝对路径**，宿主机与容器内路径一致。
+每台现场机器导入：
 
-## 快速开始
+```bash
+docker load -i vllm-ascend-v0.30.0-a3.tar
+docker images | grep vllm-ascend
+```
 
-单机（1 台 16 卡）：
+`start.sh` 第一步就是查本地有没有这个镜像。没有就提示去 `docker load`，然后退出，不会去 pull。内网 pull 的结果是等几分钟、然后报一个 TLS 相关的错误，看起来像网络问题，实际是根本没有出口。
+
+权重用 ModelScope 预下载到宿主机，下的时候带 `--revision`，别用 `master`，同一个月拉两次可能不是同一份。挂载时宿主机路径和容器内保持一致，多机每台都得一样。路径不一致的表现很坑：各 rank 加载的分片对不上，报错却指向算子，顺着报错查半天也查不到路径头上。
+
+## 起来
+
+单机，1 台 16 卡：
 
 ```bash
 cd v0.30.0-a3/DeepSeek-V4.1-Flash/single
-vim config.env        # 改 MODEL_PATH / IMAGE / NIC_NAME 三项
+vim config.env        # 三项：MODEL_PATH / IMAGE / NIC_NAME
 bash start.sh         # 检查环境 → 起容器 → 跟日志
-bash check.sh         # 另开窗口：验证能不能真推理
+bash check.sh         # 另开一个窗口验证
 ```
 
-PD 分离（4 台，2P2D）：
+PD 分离，4 台 2P2D：
 
 ```bash
 cd v0.30.0-a3/DeepSeek-V4.1-Flash/pd-2p2d
 vim config.env        # 4 台用同一份：节点 IP、拓扑、权重路径
 
-bash start.sh decode    # 每个 Decode 节点，D1 先
-bash start.sh prefill   # 每个 Prefill 节点，P1 先
-bash start.sh proxy     # 代理节点，等后端全绿
-bash check.sh           # 任意能访问代理的机器
+bash start.sh decode      # 每个 Decode 节点，D1 先
+bash start.sh prefill     # 每个 Prefill 节点，P1 先
+bash start.sh proxy       # 代理节点，等后端全绿
+bash check.sh
 ```
 
-顺序不可颠倒：**Decode 全组 → Prefill 全组 → 代理**。任何一步没全绿就往下走，请求会挂在 KV 传输上而不是报错。
+顺序别颠倒。Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是卡住、不报错，很容易误判成权重加载慢。代理也一样，后端没全绿就起，客户端只会等到超时——代理自己的 `/healthcheck` 返回 200 只说明注册了几个实例，不代表能用。
 
-## 验证与交付标准
+`stop.sh` 停掉本机。残留容器会占着 7100 起的端口，下次 `start.sh` 会在端口检查那一步拦下来，这比让引擎初始化到一半因端口冲突退出好查。
 
-"脚本能起来"不等于"能交付"。交付判定标准是 **`check.sh` 退出码为 0**，分层逐级通过：
+## 怎么算跑完
 
-| 层 | 内容 |
-|---|---|
-| 1 环境 | `bash _shared/preflight.sh`（可选但建议）：`npu-smi`、可见卡数、driver/CANN、nofile、网卡、端口 |
-| 2 容器与进程 | 容器在跑、引擎进程数符合预期、端口都在监听 |
-| 3 服务健康 | 单机 `GET /health`；PD 逐个后端 `GET /health` |
-| 4 真实推理 | 一次 `/v1/chat/completions`；PD 还要经代理走一遍（唯一能证明 P→D KV 传输通的一步） |
+不是"进程还活着"就算。判定标准是 `bash check.sh` 退出码 0，能自动查的它都查了。
 
-**输出与退出码统一**：
+单机三层：`/health` → `/v1/models` → 一次真实对话。PD 是先按后端逐个点名（P 8 个、D 32 个）→ 代理 → 经代理打一次真实请求。最后一层是唯一能证明 P→D 的 KV 传输通了的一步。
 
-```
-[ OK ] 10.0.0.21:7100
-[FAIL] 10.0.0.21:7115
+退出码 0 全过，1 有失败。
 
-退出码 0 = 全过，1 = 有失败
-```
+环境那一层不在这里——驱动、CANN、nofile、网卡、端口，用 `bash _shared/preflight.sh --config <config.env>` 单独跑。不是必须的，但能省掉一批"到了现场才发现"的问题。
 
-**就绪闸（PD 强制）**：`start.sh proxy` 会先逐个检查后端 `/health`，有一个没起来就拒绝启动。代理的 `/healthcheck` 只反映"注册了多少实例"，不代表后端可用——先起 proxy 后起引擎，客户端必然收到 `All connection attempts failed` 或长时间挂住。这一条是现场踩出来的，不要再踩。
+PD 的代理启动前还有一道闸：`start.sh proxy` 会先逐个检查后端，有一个没起来就拒绝启动。这条是踩出来的——先起代理后起引擎，客户端必然收到 `All connection attempts failed`，或者挂到 180 秒超时。
 
-## 新增一个模型
+## 加一个模型
 
-**复制一个已经跑通的模型目录**，不要从零写：
+最快的办法是复制一个已经跑通的：
 
 ```bash
-cp -r v0.30.0-a3/DeepSeek-V4.1-Flash v0.30.0-a3/<新模型名>
-cd v0.30.0-a3/<新模型名>
+cp -r v0.30.0-a3/DeepSeek-V4.1-Flash v0.30.0-a3/Qwen3-32B
 ```
 
-然后按顺序做五件事：
+然后：
 
-1. 改 `single/config.env` 与 `pd-*/config.env`：权重路径、拓扑、端口、节点 IP
-2. 改 `single/serve.sh` 与 `pd-*/run_p.sh`、`run_d.sh` 里的模型参数（tokenizer / parser / 量化 / 投机解码 / offload）——**这是唯一需要懂模型的地方**
-3. 删掉不需要的形态目录，不要留空目录占位
-4. 实际跑通：`start.sh` → `check.sh` → 长上下文 + 并发压测
-5. 写 `<模型>/README.md` 六节，其中「踩过的坑」没写完不要提交
+1. 改 `config.env`：权重路径、拓扑、端口、节点 IP
+2. 改 `serve.sh`、`run_p.sh`、`run_d.sh` 里的模型参数。tokenizer、parser、量化、投机解码、offload 这几个是真需要懂模型的，也是唯一需要动脑的地方
+3. 不需要的形态目录直接删掉，不要留空目录占位
+4. 实际跑一遍：`start.sh` → `check.sh` → 长上下文 → 并发十分钟
+5. 写 `<模型>/README.md`，六节。「踩过的坑」不写完别提交
 
-## 新增一个镜像版本
+## 加一个版本
 
-换硬件系列（A2 ↔ A3）或大版本升级时，复制整个版本目录：
+换硬件系列（A2 ↔ A3）或者大版本升级时，整个版本目录复制一份：
 
 ```bash
-cp -r v0.30.0-a3 v0.30.0-a2-next
-# 再把 config.env 里的 IMAGE 换成新 tag，逐台 docker load 新镜像
+cp -r v0.30.0-a3 v0.28.0-a2
 ```
 
-已跑通的旧版本目录**保持原样不动**——现场环境五花八门，旧版本随时可能被重新用到。
+再把各 `config.env` 里的 `IMAGE` 换掉，每台机器 `docker load` 新镜像。跑通的旧版本目录保持原样，现场情况五花八门，旧版本说不定哪天又要用。
 
-## 版本与硬件锚定（强制）
+## 版本信息要锁死
 
-"能跑"的前提是**知道跑的是什么**。每个版本目录的 `README.md` 与每个形态脚本的头部注释，必须锁定以下全部信息：
+"能跑"的前提是知道跑的是什么。每个版本目录的 README、每个形态脚本的头部注释，都要写清这些：
 
 | 项 | 要求 |
 |---|---|
-| 镜像锚点 | `quay.io/ascend/vllm-ascend@sha256:<digest>`；无法用 digest 时用 `tag` + 拉取日期。**tag 会被重推**，同一 tag 今天拉和三个月后拉可能不是同一层 |
-| 镜像内 CANN | 容器内 `cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg` 的**实测**输出 |
-| 宿主驱动 | `npu-smi info` 的 Driver / Firmware 版本，须满足镜像要求（不满足会在容器里表现为"找不到设备"） |
-| 软件栈 | `vllm --version`、`vllm-ascend`、`torch-npu`、Python 的实测版本号 |
-| 硬件拓扑 | 机型（Atlas 800T A2 / A3）、节点数、单机卡数、单卡 HBM、节点内/跨节点互联 |
-| 参考文档 | vLLM-Ascend 文档的**版本化 URL**，或 tag `vX.Y.Z` + commit sha |
-| 参考代码 | `<repo>/blob/<tag>/examples/<file>`，必要时附该文件的 commit sha |
-| 权重锚点 | ModelScope `model_id` + `--revision <tag>` + 量化格式（`w8a8` / `w4a8` / BF16） |
+| 镜像 | `@sha256:<digest>`，实在拿不到就 tag + 拉取日期。tag 会被重推，同一个 tag 今天拉和三个月后拉可能不是一层 |
+| 镜像内 CANN | 容器里 `cat /usr/local/Ascend/ascend-toolkit/latest/version.cfg` 的真实输出 |
+| 宿主驱动 | `npu-smi info` 里的 Driver / Firmware。低于镜像要求时，表现是容器里"找不到设备" |
+| 软件栈 | `vllm --version`、vllm-ascend、torch-npu、Python，都写实测值 |
+| 硬件 | 机型、节点数、单机卡数、单卡 HBM、节点内和跨节点怎么连 |
+| 参考文档 | 带版本段的 URL（`/zh-cn/<version>/`）。`latest` 会滚动，不能当锚点 |
+| 参考代码 | `<repo>/blob/<tag>/examples/<file>`，必要时附 commit sha |
+| 权重 | ModelScope `model_id` + `--revision <tag>` + 量化格式 |
 
-三条纪律：
+官方文档和 GitHub main 对不上时，以锁定版本为准，并在模型 README 里写一句分支差异。不要凭经验放宽版本依赖。版本信息写实测输出，PR 里贴一段 `npu-smi info` 和 `vllm --version` 的原文，比写"已验证"有用。
 
-1. 官方文档与 GitHub `main` 不一致时，**以锁定版本的官方文档为准**，并在模型 README 里注明分支差异；
-2. 不凭经验放宽或收紧版本依赖；
-3. 版本信息必须是**实测输出**，不是抄来的——PR 里贴一段 `npu-smi info` + `vllm --version` + `version.cfg` 的原始输出，比写"已验证"有说服力得多。
+## 权重校验
 
-## 模型下载与权重校验
+下载完核这几项：
 
-1. 优先 **ModelScope**；离线 / 内网环境**先预下载到宿主机，再只读挂载进容器**，禁止容器内在线拉取；
-2. **必须显式 `--revision`**，禁止默认 `master`——不同时间拉到的权重不同，复现性直接失效；
-3. 下载后校验，写进 `config.env` 的前置注释或 `start.sh` 检查：
+- 文件数和总大小对得上模型仓库页面
+- `config.json` 的量化字段和 `quant_model_description.json` 同时存在且一致
+- P / D / 各节点挂的路径完全一样，revision 一样
+- 容器里 `ls <MODEL_PATH>/*.safetensors | wc -l` 数量对
 
-| 检查项 | 做法 |
-|---|---|
-| 完整性 | 文件数与总大小与模型仓库页面一致 |
-| 量化格式 | `config.json` 的量化字段与 `quant_model_description.json` 同时存在且一致 |
-| 版本一致 | P / D / 各节点挂载的路径完全相同，`revision` 相同 |
-| 可读性 | 容器内 `ls <MODEL_PATH>/*.safetensors \| wc -l` 与预期一致 |
-
-> `w4a8` 被误挂成 `w8a8`（或反之）是最隐蔽的一类故障：服务能起、结果出得来，但精度与性能全部错位。这条校验不要省。
-
-## 配置与可变项
-
-- `config.env` 只描述"**这一次部署**怎么起"，通用能力与模型参数不写进去；
-- 每个字段带一行注释，说明"为什么是这个值"而不是"这是什么"：
-
-```bash
-DECODE_DP_LOCAL=16     # 16 引擎 × TP1 = 16 卡，刚好占满 A3
-```
-
-- 脚本正文不出现硬编码的 IP / 路径；确需保留时注释标注「**需按实际环境修改**」；
-- `start.sh` 开头一次性检查前置条件（镜像在不在、权重在不在、卡数够不够、端口占没占），缺项当场退出并指名缺哪个；
-- 卡数一致性：`可见卡数 == DP_LOCAL × TP × PCP`，不匹配在启动前就退出——这是 HCCL 卡死最常见的前置原因；
-- 禁止提交凭证 / Token / 客户真实密码。`config.env` 随仓库提交以便复现，因此只能放占位 IP。
+`w4a8` 被当成 `w8a8` 挂上（或者反过来）是最隐蔽的一类故障：服务能起，结果也出得来，但精度和性能全错位，事后很难往回追。所以下载完顺手核一下，尤其量化格式。
 
 ## 性能基线
 
-每个模型目录必须记录一次可复现的基线，写在模型 README 或 `docs/`：
+每个模型至少留一次可复现的基线，写在模型 README 或 `docs/` 里：硬件和拓扑、并行配置（dp/tp/pcp/EP/有没有开投机解码）、负载（输入输出长度、并发、请求总数）、指标（TTFT P90、TPOT P90、输出 tok/s、总吞吐）、用什么工具跑的、完整命令是什么。
 
-| 字段 | 说明 |
-|---|---|
-| 硬件与拓扑 | 机型 / 节点数 / 卡数 |
-| 并行配置 | `dp` / `tp` / `pcp` / EP / 是否开投机解码 |
-| 负载 | 输入长度 / 输出长度 / 并发数 / 请求总数 |
-| 指标 | TTFT（P90）、TPOT（P90）、输出 tok/s、总吞吐 |
-| 工具 | `vllm bench serve` 或 AISBench，附完整命令 |
+没有基线，下游就分不清"升级后变慢"和"本来就这样"。调优的 PR 附前、后两组数据。
 
-不开基线，下游就无法区分"升级后变慢"和"本来就这样"。调优类 PR 必须附前/后两组数据。
+## 踩过的坑记在哪
 
-## 踩坑与排错沉淀
+三个地方，看影响范围：通用的进 `docs/05-troubleshooting.md`，模型特有的进模型 README，代码层面能规避的写进脚本注释。
 
-坑的归宿只有三处，按影响范围选：`docs/05-troubleshooting.md`（通用）、模型 README「踩过的坑」（模型专属）、脚本头部注释（代码级规避）。
-
-每条记录固定五字段：
+每条记五项：
 
 ```markdown
-### <一句话症状，便于搜索>
+### <一句话症状，方便搜>
 
-- 症状: 完整报错关键行（原样粘贴，不要改写）
+- 症状: 完整报错的关键行，原样粘贴，不要改写
 - 触发条件: 机型 / 卡数 / 形态 / 并发
 - 根因: 为什么会这样
-- 处置: 可执行步骤
+- 处置: 能照着做的步骤
 - 适用版本: 镜像 tag + CANN + vllm-ascend 版本
 ```
 
-> **「适用版本」是必填项。** 不带版本结论的踩坑记录，半年后就是误导。结论失效时在标题前标 `DEPRECATED` 并指向新结论，不要直接删除。
+「适用版本」是必填的。不带版本的结论，半年后就是误导。结论失效了在标题前标 `DEPRECATED` 并指向新结论，别直接删。
 
-## 通用文档
+## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [01 环境准备与预检](docs/01-preflight.md) | 硬件软件基线、11 类检查项、端口规划、内网镜像准备 |
-| [02 单机部署](docs/02-single-node.md) | 最简路径，验证镜像与权重 |
+| [01 环境准备与预检](docs/01-preflight.md) | 软硬件基线、11 类检查、端口规划、内网准备 |
+| [02 单机部署](docs/02-single-node.md) | 最简路径，先验证镜像和权重 |
 | [03 PD 分离部署](docs/03-pd-disaggregation.md) | 拓扑设计、启动顺序、代理端点、一致性约束 |
-| [04 关键参数与调优](docs/04-tuning.md) | TP/DP 算法、性能参数相互作用、调优实验方法 |
-| [05 排错手册](docs/05-troubleshooting.md) | 按现象分流的排查路径 |
-| [06 新模型接入检查清单](docs/06-model-onboarding.md) | 换模型前必过的一遍 |
+| [04 关键参数与调优](docs/04-tuning.md) | TP/DP 怎么算、参数之间怎么互相影响 |
+| [05 排错手册](docs/05-troubleshooting.md) | 按现象分流 |
+| [06 新模型接入清单](docs/06-model-onboarding.md) | 换模型前过一遍 |
 
-## 复用能力（skills）
+## Skills
 
-`skills/` 把上面这些流程封装成 Agent 可加载的 skill。skill 只做判断与约束，**所有动作都调用本仓库的脚本**，不另写一套。
+`skills/` 里是给 Agent 用的流程封装，只做判断和约束，动作还是调仓库里的脚本。
 
-| Skill | 管什么 |
+| Skill | 干什么 |
 |---|---|
-| [env-preflight](skills/ascend-env-preflight/) | 环境体检、容器加固、快照留证 |
+| [env-preflight](skills/ascend-env-preflight/) | 环境体检、镜像准备、快照留证 |
 | [deploy-single](skills/ascend-deploy-single/) | 单机 TP/DP 切分与三层验证 |
-| [deploy-pd](skills/ascend-deploy-pd/) | 组网拓扑、rank 推导、启动顺序、代理端点 |
-| [troubleshoot](skills/ascend-troubleshoot/) | 按现象分流的根因定位 |
+| [deploy-pd](skills/ascend-deploy-pd/) | 拓扑、rank 推导、启动顺序、代理端点 |
+| [troubleshoot](skills/ascend-troubleshoot/) | 按现象定位根因 |
 | [perf-tuning](skills/ascend-perf-tuning/) | 参数取舍、单变量实验、基线记录 |
-| [model-onboarding](skills/ascend-model-onboarding/) | 新模型 / 新镜像版本接入与评审 |
+| [model-onboarding](skills/ascend-model-onboarding/) | 新模型 / 新版本接入 |
 
-安装与路由表见 [skills/README.md](skills/README.md)。**顺序不可跳**：预检 → 单机 → PD。
+安装方式和场景路由在 [skills/README.md](skills/README.md)。
 
-## 弃用与归档
+## 写脚本的约定
 
-- 已跑通的旧版本目录**保留**，只在其 `README.md` 顶部注明状态（`维护中` / `仅存档` / `已被 <新版本> 取代`）；
-- 参数、结论过期的，标 `DEPRECATED` + 取代关系，**不直接删**；
-- 每季度清理一次：确认无人引用后再物理删除。
+现场执行的是实施同事，不一定熟 shell，所以：
 
-> 不写这条，半年后仓库会变成考古现场，没人敢判断哪份才是当前的。
+- **一个文件一件事。** 那条 `vllm serve` 就逐行列在 `serve.sh` 里，别用函数拼参数、别包多层 `source`。改一个值应该十秒内能找到位置。
+- **不加构建层。** 没有 Makefile，没有命令别名，不做转发入口。`bash start.sh` 已经是现场最长的命令。
+- **不联网。** 不 pull、不 pip、不 clone。缺什么就在开头提示，然后退出。
+- **前置检查一次做完。** 镜像、权重、卡数、端口，缺哪个说哪个，别跑到一半才崩。
+- **不加 sudo，不改系统配置，不清用户数据。**
 
-## 设计约定
+别为了"复用"把二十行逻辑抽到别处再包三层。现场看不懂的抽象，等于没有。
 
-1. **脚本自包含**：形态目录里的脚本不依赖别的脚本仓库外的文件，整目录拷到现场就能跑。可读性优先于复用——现场改得动比抽象漂亮重要。
-2. **不引入构建层**：没有 Makefile、没有命令别名、没有多层转发。`bash start.sh` 就是全部。
-3. **配置进目录**：每个部署形态一个 `config.env`，只描述"这一套怎么起"。
-4. **官方脚本不落库**：`launch_online_dp.py`、代理脚本直接从镜像里执行，不复制进仓库，避免版本漂移。
-5. **P/D 不合并**：两侧参数集角色特定，混用会掉性能甚至起不来，宁可两份文件带互斥注释。
-6. **README 是交付物**：脚本能跑只是及格，能让人三个月后照着 README 再跑一遍才算完成。
-7. **变更可回退**：性能相关改动必须附前/后基线，否则视为未验证。
+## 归档
 
-## 参考资源
+跑通过的旧版本目录保留，在 README 顶部标一下状态：`维护中` / `仅存档` / `已被 <新版本> 取代`。参数和结论过期的标 `DEPRECATED` 加取代关系，不直接删。每季度清一次，确认没人引用再物理删除。
 
-- vLLM Ascend 官方文档：<https://docs.vllm.ai/projects/ascend/zh-cn/latest/getting_started/overview.html>
-- vLLM-Ascend GitHub：<https://github.com/vllm-project/vllm-ascend>
-- 模型下载（ModelScope）：<https://modelscope.cn/models>
-- 昇腾社区（驱动 / CANN 版本配套表）：<https://www.hiascend.com/>
+不写这条，半年后这个仓库就没人敢判断哪份是当前的了。
 
-> 引用官方文档时请带版本段（`/zh-cn/<version>/`），`latest` 会滚动更新，无法作为锚点。
+## 参考
+
+- vLLM Ascend 文档：<https://docs.vllm.ai/projects/ascend/zh-cn/latest/getting_started/overview.html>
+- vLLM-Ascend 仓库：<https://github.com/vllm-project/vllm-ascend>
+- 权重：<https://modelscope.cn/models>
+- 驱动 / CANN 配套：<https://www.hiascend.com/>
+
+引用官方文档带版本段，`latest` 会滚动。
 
 ---
 
-## 本文件与 CONTRIBUTING 的分工
-
-| 文件 | 管什么 |
-|---|---|
-| `README.md`（本文件） | **规则总纲**：目录结构、形态区分、内网准备、验证标准、基线、踩坑、弃用 |
-| `CONTRIBUTING.md` | **执行细则**：命名规范、`config.env` 写法、脚本骨架、commit 前缀、评审勾选 |
-
-两者冲突时以本文件为准，并同步修正 `CONTRIBUTING.md`。
+`README.md` 管规则：目录结构、形态区分、内网准备、验收标准、基线、踩坑、归档。`CONTRIBUTING.md` 管执行细则：命名、`config.env` 怎么写、脚本骨架、commit、评审勾选。冲突时以本文件为准，并顺手把 CONTRIBUTING 改过来。
