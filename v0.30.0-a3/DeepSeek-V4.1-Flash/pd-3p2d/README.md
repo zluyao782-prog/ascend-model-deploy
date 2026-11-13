@@ -123,3 +123,13 @@ IMAGE_DIR="/查到的目录"
 ```
 
 查不到才是镜像真没带这份文件，换带 examples 的镜像版本，或从源码同 tag 取出来挂载。
+
+**报 `unrecognized arguments: --pcp-size`** 是镜像里的 launcher 版本太老（用法里没有这个参数）。脚本已改成按能力探测：`PCP=1` 的 Decode 不传，`PCP>1` 先跑 `-h` 看支不支持。
+
+如果 Prefill 启动时打出「launcher 不认 --pcp-size」的警告，说明 PCP 只能靠 `run_p.sh` 里的 `--prefill-context-parallel-size` 生效。**这时务必确认卡真的用上了**：
+
+```bash
+npu-smi info     # P 那台应该是 16 张卡都有显存占用，只有 4 张就是 PCP 没生效
+```
+
+只有 4 张卡的显存被占，说明老 launcher 按 TP=1 给每个引擎只分了一张卡，PCP 白配了——要么换支持 PCP 的镜像版本，要么把 P 侧改成 TP4 × DP4 重新验一遍参数。

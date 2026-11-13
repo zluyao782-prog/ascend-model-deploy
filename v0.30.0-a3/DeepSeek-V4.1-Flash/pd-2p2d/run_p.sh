@@ -19,6 +19,8 @@ set -u
 . "${AE_CONFIG:-$(dirname "$0")/../../config.env}"
 
 RANK=$4
+# PCP 优先用 launcher 传来的第 8 个参数；老版本 launcher 只传 7 个，回落到 config
+PCP="${8:-${PREFILL_PCP:-1}}"
 
 # ---------------------------------------------------------------- 通信环境
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
@@ -63,7 +65,7 @@ vllm serve "$MODEL_PATH" \
     --data-parallel-address "$5" \
     --data-parallel-rpc-port "$6" \
     --tensor-parallel-size "$7" \
-    --prefill-context-parallel-size "$8" \
+    --prefill-context-parallel-size "$PCP" \
     --served-model-name "$SERVED_MODEL_NAME" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-batched-tokens 8192 \

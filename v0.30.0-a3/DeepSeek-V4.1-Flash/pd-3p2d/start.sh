@@ -163,6 +163,20 @@ if [ "$ROLE" != "proxy" ]; then
     fi
     echo
 
+    # launcher 的参数在不同镜像版本里不一样：较老的版本没有 --pcp-size。
+    # 硬传会直接 "unrecognized arguments" 退出，所以先探测一下。
+    PCP_ARG=""
+    if [ "$PCP" != "1" ]; then
+        if docker run --rm "$IMAGE" python3 "$LAUNCHER" -h 2>&1 | grep -q -- "--pcp-size"; then
+            PCP_ARG="--pcp-size $PCP"
+        else
+            echo "⚠ 这个镜像的 launcher 不认 --pcp-size（老版本），PCP 只能靠 run_p.sh 里的"
+            echo "  --prefill-context-parallel-size 生效。注意：如果它给每个引擎只分了 TP 张卡，"
+            echo "  PCP>1 会卡不够用，需要换支持 PCP 的镜像版本，或改用 TP 凑卡数。"
+            echo
+        fi
+    fi
+
     docker rm -f "$CTR" >/dev/null 2>&1 || true
 
     docker run -d --name "$CTR" \
@@ -180,7 +194,7 @@ if [ "$ROLE" != "proxy" ]; then
         python3 "$LAUNCHER" \
         --dp-size "$GLOBAL_DP" \
         --tp-size "$TP" \
-        --pcp-size "$PCP" \
+        $PCP_ARG \
         --dp-size-local "$EACH" \
         --dp-rank-start "$RANK_START" \
         --dp-address "$DP_ADDR" \
