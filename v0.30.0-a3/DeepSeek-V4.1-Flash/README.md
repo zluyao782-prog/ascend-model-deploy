@@ -339,7 +339,9 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 **KV 端口没放开，表现是挂住，不是报错。** `30000+rank` 和 `30100+rank` 那两段跨节点被拦的时候，请求一直等 KV 传输。看到"后端全绿、代理正常、请求 180 秒超时"，先查这两段（2P2D 是 40 个，3P2D 是 44 个）。
 
-**`unrecognized arguments: --pcp-size`。** 镜像里的 `launch_online_dp.py` 版本比较老，用法里没有这个参数。脚本现在按能力探测：PCP=1 不传，PCP>1 先看 `-h` 输出。老版本还只给模板传 7 个位置参数，所以 `run_p.sh` 里的 PCP 改成从第 8 个参数取、取不到回落到 `config.env`。留意一点：老 launcher 不知道 PCP，可能每个引擎只分 TP 张卡，`npu-smi` 上会看到一半卡闲置。
+**`unrecognized arguments: --pcp-size`。** 镜像里的 `launch_online_dp.py` 版本比较老，用法里没有这个参数。脚本现在启动前跑一次 `-h`，**它支持哪个参数才传哪个**；老版本只给模板传 7 个位置参数，所以 `run_p.sh` 的 PCP 从第 8 个参数取、取不到就回落到 `config.env`。
+
+但老 launcher 不知道 PCP，每个引擎只按 TP 分卡，PCP4 会有一半卡闲置——`npu-smi` 上只有 4 张有显存占用就是没生效。这种要换镜像，或把 P 侧改成 `TP4 × DP4`（`PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`）。
 
 **池化把主机内存吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开池化之前先按「引擎数 ×（段 + 缓冲）」算一遍。
 

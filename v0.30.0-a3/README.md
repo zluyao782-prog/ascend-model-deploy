@@ -42,4 +42,13 @@ vim ./Qwen3-32B/single/serve.sh        # tokenizer、parser、量化这些模型
 /vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py
 ```
 
+**把 launcher 的能力记下来**，它是版本的硬属性：
+
+```bash
+docker run --rm quay.io/ascend/vllm-ascend:v0.30.0-a3 \
+  python3 /vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/launch_online_dp.py -h
+```
+
+输出里有没有 `--pcp-size`，决定了 P 侧能不能用 PCP 凑卡数。`start.sh` 现在会跑一次 `-h` 协商参数，但**结论要贴进本文件**，否则下一个人还得重新试。
+
 换镜像版本后如果路径变了，`start.sh` 会直接报"镜像里找不到 xxx"并给一条 find 命令。照着查出来，把目录填进 `config.env` 的 `IMAGE_DIR` 就行，不用改脚本。

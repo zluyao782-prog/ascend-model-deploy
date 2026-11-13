@@ -144,6 +144,7 @@ cp -r v0.30.0-a3 v0.28.0-a2
 | 硬件 | 机型、节点数、单机卡数、单卡 HBM、节点内和跨节点怎么连 |
 | 参考文档 | 带版本段的 URL（`/zh-cn/<version>/`）。`latest` 会滚动，不能当锚点 |
 | 参考代码 | `<repo>/blob/<tag>/examples/<file>`，必要时附 commit sha |
+| 镜像内 launcher 能力 | `python3 launch_online_dp.py -h` 的**原始输出**。它决定能传哪些参数——`--pcp-size` 就是后来才加的，老版本传了直接 `unrecognized arguments` |
 | 权重 | ModelScope `model_id` + `--revision <tag>` + 量化格式 |
 
 官方文档和 GitHub main 对不上时，以锁定版本为准，并在模型 README 里写一句分支差异。不要凭经验放宽版本依赖。版本信息写实测输出，PR 里贴一段 `npu-smi info` 和 `vllm --version` 的原文，比写"已验证"有用。

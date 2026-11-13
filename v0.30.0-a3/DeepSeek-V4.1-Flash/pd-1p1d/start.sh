@@ -142,18 +142,38 @@ if [ "$ROLE" != "proxy" ]; then
     echo "   引擎端口    : $BASE_PORT - $((BASE_PORT + EACH - 1))"
     echo
 
-    # launcher 的参数在不同镜像版本里不一样：较老的版本没有 --pcp-size。
-    # 硬传会直接 "unrecognized arguments" 退出，所以先探测一下。
-    PCP_ARG=""
-    if [ "$PCP" != "1" ]; then
-        if docker run --rm "$IMAGE" python3 "$LAUNCHER" -h 2>&1 | grep -q -- "--pcp-size"; then
-            PCP_ARG="--pcp-size $PCP"
+    # launcher 的 CLI 在不同镜像版本里不一样（老版本没有 --pcp-size）。
+    # 不猜，先问它支持哪些参数，支持哪个才传哪个。
+    HELP=$(docker run --rm "$IMAGE" python3 "$LAUNCHER" -h 2>&1 || true)
+    echo "$HELP" | grep -q -- "--dp-size" || {
+        echo "launcher 起不来，先看这段输出："
+        echo "$HELP" | head -5
+        exit 1
+    }
+
+    L_ARGS=(--dp-size "$GLOBAL_DP" --dp-address "$DP_ADDR")
+    ladd() {   # 参数名 值：launcher 的 help 里有才加
+        if echo "$HELP" | grep -q -- "$1"; then
+            L_ARGS+=("$1" "$2")
         else
-            echo "⚠ 这个镜像的 launcher 不认 --pcp-size（老版本），PCP 只能靠 run_p.sh 里的"
-            echo "  --prefill-context-parallel-size 生效。注意：如果它给每个引擎只分了 TP 张卡，"
-            echo "  PCP>1 会卡不够用，需要换支持 PCP 的镜像版本，或改用 TP 凑卡数。"
-            echo
+            echo "提示：这个 launcher 不认 $1，跳过"
         fi
+    }
+    ladd --tp-size "$TP"
+    ladd --dp-size-local "$EACH"
+    ladd --dp-rank-start "$RANK_START"
+    ladd --dp-rpc-port "$DP_RPC_PORT"
+    ladd --vllm-start-port "$BASE_PORT"
+    PCP_SUPPORTED=1
+    if [ "$PCP" != "1" ]; then
+        echo "$HELP" | grep -q -- "--pcp-size" || PCP_SUPPORTED=0
+        ladd --pcp-size "$PCP"
+    fi
+    if [ "$PCP_SUPPORTED" = "0" ]; then
+        echo "⚠ 这个 launcher 没有 --pcp-size：PCP 只能靠 run_p.sh 生效，"
+        echo "  但它按 TP 给每个引擎分卡，所以每台只有 $TP 张卡会被用上（不是 $((TP * PCP)) 张）。"
+        echo "  要真正用上 PCP，换支持它的镜像版本；或者把 PREFILL_TP 调大、PREFILL_PCP 设 1。"
+        echo
     fi
 
     docker rm -f "$CTR" >/dev/null 2>&1 || true
@@ -170,14 +190,7 @@ if [ "$ROLE" != "proxy" ]; then
         -e AE_CONFIG="$PWD/config.env" \
         "$IMAGE" \
         python3 "$LAUNCHER" \
-        --dp-size "$GLOBAL_DP" \
-        --tp-size "$TP" \
-        $PCP_ARG \
-        --dp-size-local "$EACH" \
-        --dp-rank-start "$RANK_START" \
-        --dp-address "$DP_ADDR" \
-        --dp-rpc-port "$DP_RPC_PORT" \
-        --vllm-start-port "$BASE_PORT"
+        "${L_ARGS[@]}"
 
     echo
     echo "已启动。每个 rank 都要打印 Application startup complete. 才算就绪，大模型可能几十分钟。"
