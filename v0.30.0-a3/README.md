@@ -2,37 +2,39 @@
 
 vLLM Ascend 的 v0.30.0，A3 硬件。这个目录下一个模型一个文件夹，共用同一套镜像和端口约定。
 
+**本目录的前提镜像是 openEuler 构建**，tag 带 `-openeuler`。这点很关键：`v0.30.0-a3` 这个版本号下有多个构建，examples 路径和 vllm 参数集都不一样，混着用会连环报错。
+
 | | |
 |---|---|
-| 镜像 | `quay.io/ascend/vllm-ascend:v0.30.0-a3` |
+| 镜像 | `quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler`（openEuler 构建） |
 | 硬件 | Atlas 800 A3，64G × 16 逻辑设备每台 |
-| vLLM Ascend | v0.30.0rc1 及以上 |
+| vLLM Ascend | v0.30.0rc1（openEuler 构建，examples 在 `external_online_dp/`） |
 | 端口 | 引擎 7100 起，DP 协调 12321，KV 30000 / 30100，代理 1999 |
 
 A2 和 A3 的 tag 不能混用。要跑 A2 就新建一个 `v0.30.0-a2/`，别在同一个目录里换 tag 凑合。
 
 ## 构建变体：版本号一样，内容不一定一样
 
-同一个 `0.30.0-a3` 有多个构建，**路径和参数集都不同**。换镜像时先对一下：
+同一个 `0.30.0-a3` 有两个构建，**路径和参数集都不同**。本仓库按右边这一栏配：
 
-| | quay.io 官方构建 | openEuler 构建 |
+| | quay.io 官方构建 | openEuler 构建（本仓库用这个） |
 |---|---|---|
-| 镜像 tag | `quay.io/ascend/vllm-ascend:v0.30.0-a3` | 形如 `v0.30.0-a3-openeuler`（以现场 `docker images` 为准） |
+| 镜像 tag | `quay.io/ascend/vllm-ascend:v0.30.0-a3` | `quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler` |
 | launcher / 代理路径 | `examples/disaggregated_prefill_v1/` | `examples/external_online_dp/` |
 | `--pcp-size` | 有，PCP 按 TP×PCP 分卡 | **没有**，P 侧用不了 PCP |
 | SWA 重放开关 | 有 | **没有**，`--swa-bounded-replay` 两个方向都会 unrecognized |
+| P 侧怎么占满 16 卡 | `TP1 × PCP4 × DP4` | `TP4 × DP4` |
 
-openEuler 构建上：
+`config.env` 里已经按 openEuler 构建配好，正常不用动：
 
 ```bash
-# config.env
-IMAGE="<现场的 tag>"
+IMAGE="quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler"
 IMAGE_DIR="/vllm-workspace/vllm-ascend/examples/external_online_dp"
 ```
 
-P 侧不能靠 PCP 凑 16 卡，改成 `PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`，或者换回官方构建。
+要换成官方构建，得同时改三处：`IMAGE`、`IMAGE_DIR`（换成 `disaggregated_prefill_v1`）、P 侧拓扑（`PREFILL_TP=1` / `PREFILL_PCP=4`）。只改 tag 不改路径，第一步就是「镜像里找不到 xxx」。
 
-**这张表要现场实测填，不要照抄。** 就两条命令：
+换镜像前先跑这两条确认，别照抄表格：
 
 ```bash
 docker run --rm $IMAGE vllm serve -h 2>&1 | grep -E "swa|pcp|engram|speculative"
@@ -66,17 +68,17 @@ vim ./Qwen3-32B/single/serve.sh        # tokenizer、parser、量化这些模型
 `launch_online_dp.py` 和 `load_balance_proxy_server_example.py` 都随镜像分发，不进仓库——放进来过几个月就跟镜像版本对不上了。`start.sh` 直接从镜像里执行：
 
 ```
-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/launch_online_dp.py
-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py
+/vllm-workspace/vllm-ascend/examples/external_online_dp/launch_online_dp.py
+/vllm-workspace/vllm-ascend/examples/external_online_dp/load_balance_proxy_server_example.py
 ```
 
 **把 launcher 的能力记下来**，它是版本的硬属性：
 
 ```bash
-docker run --rm quay.io/ascend/vllm-ascend:v0.30.0-a3 \
-  python3 /vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/launch_online_dp.py -h
+docker run --rm quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler \
+  python3 /vllm-workspace/vllm-ascend/examples/external_online_dp/launch_online_dp.py -h
 ```
 
-输出里有没有 `--pcp-size`，决定了 P 侧能不能用 PCP 凑卡数。`start.sh` 现在会跑一次 `-h` 协商参数，但**结论要贴进本文件**，否则下一个人还得重新试。
+这个镜像的实测结论：参数到 `--vllm-start-port` 为止，**没有 `--pcp-size`**，只给模板传 7 个位置参数。所以 P 侧用 TP4 占卡，模板在 `PREFILL_PCP=1` 时整条参数不传。`start.sh` 启动前仍会跑一次 `-h` 协商，换镜像不用改脚本，但**新镜像的结论要贴回这里**，否则下一个人还得重新试。
 
 换镜像版本后如果路径变了，`start.sh` 会直接报"镜像里找不到 xxx"并给一条 find 命令。照着查出来，把目录填进 `config.env` 的 `IMAGE_DIR` 就行，不用改脚本。

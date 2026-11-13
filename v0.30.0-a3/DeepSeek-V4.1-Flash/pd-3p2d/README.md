@@ -4,13 +4,13 @@
 
 ## 拓扑
 
-| 节点 | 角色 | DP / TP / PCP | 全局 rank | 端口 |
-|---|---|---|---|---|
-| P1 | Prefill | 4 / 1 / 4 | 0–3 | 7100–7103 |
-| P2 | Prefill | 4 / 1 / 4 | 4–7 | 7100–7103 |
-| P3 | Prefill | 4 / 1 / 4 | 8–11 | 7100–7103 |
-| D1 | Decode | 16 / 1 / 1 | 0–15 | 7100–7115 |
-| D2 | Decode | 16 / 1 / 1 | 16–31 | 7100–7115 |
+| 节点 | 角色 | DP / TP | 全局 rank | 端口 |
+|---|---|---|---|
+| P1 | Prefill | 4 / 4 | 0–3 | 7100–7103 |
+| P2 | Prefill | 4 / 4 | 4–7 | 7100–7103 |
+| P3 | Prefill | 4 / 4 | 8–11 | 7100–7103 |
+| D1 | Decode | 16 / 1 | 0–15 | 7100–7115 |
+| D2 | Decode | 16 / 1 | 16–31 | 7100–7115 |
 
 connector 是 `prefill dp 12 / decode dp 32`，代理对外 12 + 32 = 44 个端点。
 
@@ -134,12 +134,10 @@ IMAGE_DIR="/查到的目录"
 
 查不到才是镜像真没带这份文件，换带 examples 的镜像版本，或从源码同 tag 取出来挂载。
 
-**报 `unrecognized arguments: --pcp-size`** 是镜像里的 launcher 版本太老（用法里没有这个参数）。脚本已改成按能力探测：`PCP=1` 的 Decode 不传，`PCP>1` 先跑 `-h` 看支不支持。
+**P 那台只用了 4 张卡。** `npu-smi info` 上只有 4 张有显存占用，说明 `PREFILL_TP` 还是 1。这个镜像没有 PCP，P 侧只能靠 TP 占卡，必须是 `PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`——4 引擎 × TP4 = 16 卡。
 
-如果 Prefill 启动时打出「launcher 不认 --pcp-size」的警告，说明 PCP 只能靠 `run_p.sh` 里的 `--prefill-context-parallel-size` 生效。**这时务必确认卡真的用上了**：
+反过来，如果看到 `unrecognized arguments: --pcp-size` 或 `--prefill-context-parallel-size`，说明 `PREFILL_PCP` 被改成了大于 1 的值。这个构建的 launcher 和 vllm 都不认 PCP，保持 1 即可。
 
 ```bash
-npu-smi info     # P 那台应该是 16 张卡都有显存占用，只有 4 张就是 PCP 没生效
+npu-smi info     # P 那台应该是 16 张卡都有显存占用
 ```
-
-只有 4 张卡的显存被占，说明老 launcher 按 TP=1 给每个引擎只分了一张卡，PCP 白配了——要么换支持 PCP 的镜像版本，要么把 P 侧改成 TP4 × DP4 重新验一遍参数。

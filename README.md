@@ -4,6 +4,16 @@
 
 做这个仓库的原因很朴素：同一个模型，每换一个现场就得重写一遍脚本；同一个坑，每个人轮流踩。现在分工很清楚：脚本写一次放这儿，经验写进各自 README，排错路径写进 docs。
 
+## 前提环境
+
+三样东西，缺一样现场就起不来：
+
+- **硬件**：Atlas 800 A3，每台 16 张 64G 逻辑设备。A2 不行，镜像 tag 是另一套。
+- **镜像**：`quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler`，内网提前 `docker load`。注意这个 tag 带 `-openeuler`——它和 quay.io 上同名的 `v0.30.0-a3` 是两个构建，examples 在 `external_online_dp/`（不是 `disaggregated_prefill_v1/`），没有 `--pcp-size`，SWA 重放那两个开关也不认。按同名版本号去猜，会连撞三个错。
+- **权重**：`DeepSeek-V4.1-Flash-1017-w4a8`，ModelScope 预下载到宿主机，多机必须是同一绝对路径。
+
+差异明细和换镜像时要改什么，见 [v0.30.0-a3/README.md](v0.30.0-a3/README.md)。
+
 ## 目录长这样
 
 ```
@@ -11,7 +21,7 @@ ascend-model-deploy/
 ├── _shared/        上现场前的体检和证据采集（可选，不参与部署）
 ├── docs/           通用知识：预检、调优、排错、接新模型
 ├── skills/         给 Agent 用的流程封装，只有判断和约束，不含实现
-└── v0.30.0-a3/     一个镜像版本
+└── v0.30.0-a3/     vLLM Ascend 0.30.0，A3，openEuler 构建
     ├── README.md
     └── DeepSeek-V4.1-Flash/
         ├── README.md
@@ -30,10 +40,10 @@ ascend-model-deploy/
 | 目录 | 官方参考 | 要注意的地方 |
 |---|---|---|
 | `single/` | 官方「单节点共置部署」 | 单机内 P/D 同进程共置，不是分离。不需要 KV 传输，不需要 RoCE |
-| `pd-<P>p<D>/` | `examples/disaggregated_prefill_v1/` | P、D 各自独立 dp/tp/pcp；走 Mooncake；proxy 端点列表长度必须等于 P+D 的实例数 |
+| `pd-<P>p<D>/` | `examples/external_online_dp/` | P、D 各自独立 dp/tp/pcp；走 Mooncake；proxy 端点列表长度必须等于 P+D 的实例数 |
 | `pd-colocated/`（如果要加） | 同 PD | 单机内分卡组，端口段不能重叠，`gpu-memory-utilization` 按卡算 |
 
-`pd-1p1d/`（2 台）、`pd-2p2d/`（4 台）、`pd-3p2d/`（5 台）现在都有。每台的引擎配比是一样的（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），只有节点数和 P/D 各几台不同，所以扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。每个目录里的速查卡也是按各自拓扑写的。
+`pd-1p1d/`（2 台）、`pd-2p2d/`（4 台）、`pd-3p2d/`（5 台）现在都有。每台的引擎配比是一样的（P 一台 4 引擎 × TP4，D 一台 16 引擎 × TP1），只有节点数和 P/D 各几台不同，所以扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。每个目录里的速查卡也是按各自拓扑写的。
 
 `pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 池化的 master 地址。这几项五台必须一致，改完要整体重启。池化占的主机内存是**按引擎数乘**的（D 台 16 个引擎，段填 2GB 就是 32G 再加缓冲），开之前先算一遍。细节写在模型 README 的「五台 3P2D」里。
 
@@ -50,17 +60,17 @@ ascend-model-deploy/
 镜像在有网的机器上导出，拷过去：
 
 ```bash
-docker save quay.io/ascend/vllm-ascend:v0.30.0-a3 -o vllm-ascend-v0.30.0-a3.tar
+docker save quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler -o vllm-ascend-v0.30.0-a3-openeuler.tar
 ```
 
 每台现场机器导入：
 
 ```bash
-docker load -i vllm-ascend-v0.30.0-a3.tar
+docker load -i vllm-ascend-v0.30.0-a3-openeuler.tar
 docker images | grep vllm-ascend
 ```
 
-`start.sh` 第一步就是查本地有没有这个镜像。没有就提示去 `docker load`，然后退出，不会去 pull。内网 pull 的结果是等几分钟、然后报一个 TLS 相关的错误，看起来像网络问题，实际是根本没有出口。
+`start.sh` 第一步就是查本地有没有这个镜像。没有就提示去 `docker load`，并把本机已有的 vllm-ascend tag 列出来（现场 tag 和 `config.env` 里写的不一致时，直接照着改），然后退出，不会去 pull。内网 pull 的结果是等几分钟、然后报一个 TLS 相关的错误，看起来像网络问题，实际是根本没有出口。
 
 权重用 ModelScope 预下载到宿主机，下的时候带 `--revision`，别用 `master`，同一个月拉两次可能不是同一份。挂载时宿主机路径和容器内保持一致，多机每台都得一样。路径不一致的表现很坑：各 rank 加载的分片对不上，报错却指向算子，顺着报错查半天也查不到路径头上。
 

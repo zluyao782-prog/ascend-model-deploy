@@ -6,7 +6,7 @@
 
 | 类别 | 例子 | 调错的后果 |
 |---|---|---|
-| **正确性参数**（不能乱动） | `--quantization`、`--block-size`、`--max-model-len`、`--prefill-context-parallel-size` | 起不来，或静默算错 |
+| **正确性参数**（不能乱动） | `--quantization`、`--block-size`、`--max-model-len` | 起不来，或静默算错 |
 | **资源参数**（按硬件算） | `--tensor-parallel-size`、`--data-parallel-size`、`--gpu-memory-utilization` | OOM 或卡利用率低 |
 | **性能参数**（按业务调） | `--max-num-seqs`、`--max-num-batched-tokens`、`--async-scheduling` | 吞吐或延迟劣化 |
 
@@ -27,7 +27,7 @@ NPU 数 = TP × DP_LOCAL
 经验规则：
 
 - **Decode 侧**偏好大 DP + 小 TP：解码每步的通信量与 TP 强相关，TP 越大跨卡同步开销越明显。16 卡机常见 `TP1 × DP16`。
-- **Prefill 侧**偏好 TP/PCP 分担长序列：长 prompt 的注意力计算需要把序列切开，`PREFILL_PCP` 就是干这个的。常见 `TP1 × PCP4 × DP4`。
+- **Prefill 侧**要靠并行把长序列切开：长 prompt 的注意力计算最吃这一块。openEuler 构建没有 PCP，用 `TP4 × DP4`；官方构建可以 `TP1 × PCP4 × DP4`，序列并行对长 prompt 更友好，但需要镜像支持 `--pcp-size`。
 - 模型单卡放不下时，TP 是必须的（权重分片），此时先满足"放得下"，再谈性能。
 
 ### gpu-memory-utilization

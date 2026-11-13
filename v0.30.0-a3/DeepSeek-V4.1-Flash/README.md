@@ -1,6 +1,6 @@
 # DeepSeek-V4.1-Flash 部署
 
-DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，和 PD 分离四台 2P2D。权重、镜像都一样，差别在拓扑和参数配比。
+DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的四种形态：单机 1 台 16 卡、1P1D 2 台、2P2D 4 台、3P2D 5 台。权重一样，镜像固定用 openEuler 构建，差别在拓扑、参数配比和节点数。
 
 ## 模型本身
 
@@ -10,7 +10,7 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，
 |---|---|
 | 权重 | `DeepSeek-V4.1-Flash-1017-w4a8` |
 | 下载 | <https://www.modelscope.cn/models/Eco-Tech/DeepSeek-V4.1-Flash-1017-w4a8> |
-| 镜像 | `quay.io/ascend/vllm-ascend:v0.30.0-a3` |
+| 镜像 | `quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler`（openEuler 构建） |
 | 对外模型名 | `dsv41` |
 
 权重里有两块容易漏的：DSpark 的 draft 参数（投机解码用，缺了要么起不来，要么 `--speculative-config` 直接报错），和 INT8 Engram 表（24 个 head 在 16 卡上分不匀，必须走 cpu_offload 加 DP 共享内存，脚本里已经写死了）。
@@ -20,13 +20,15 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，
 | 目录 | 机器 | 拓扑 | 什么时候用 |
 |---|---|---|---|
 | `single/` | 1 台，16 卡 | DP4 × TP4 | POC、功能验证、小并发 |
-| `pd-1p1d/` | 2 台，32 卡 | P: DP4（PCP4）+ D: DP16 | 现场只有两台，或先做小规模 PD 验证 |
-| `pd-2p2d/` | 4 台，64 卡 | P: DP8（PCP4）+ D: DP32 | 常规交付：长 prompt、高并发 |
-| `pd-3p2d/` | 5 台，80 卡 | P: DP12（PCP4）+ D: DP32 | P 侧吃紧、要走 A3 rank 组网 + Mooncake 池化 |
+| `pd-1p1d/` | 2 台，32 卡 | P: DP4 × TP4 + D: DP16 | 现场只有两台，或先做小规模 PD 验证 |
+| `pd-2p2d/` | 4 台，64 卡 | P: DP8 × TP4 + D: DP32 | 常规交付：长 prompt、高并发 |
+| `pd-3p2d/` | 5 台，80 卡 | P: DP12 × TP4 + D: DP32 | P 侧吃紧、要走 A3 rank 组网 + Mooncake 池化 |
 
 建议先单机跑通再上 PD。单机能跑说明权重、镜像、CANN 三者匹配，PD 无非多引入网络和 KV 传输两个变量，出问题范围小得多。
 
-四个 PD 目录是同一份东西的不同规模：**每台的引擎配比完全一样**（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），区别只是各几台。所以 `run_p.sh`、`run_d.sh` 在几套之间只差 rank 组网那几行，扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
+四个 PD 目录是同一份东西的不同规模：**每台的引擎配比完全一样**（P 一台 4 引擎 × TP4，D 一台 16 引擎 × TP1），区别只是各几台。所以 `run_p.sh`、`run_d.sh` 在几套之间只差 rank 组网那几行，扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
+
+P 侧用 TP4 而不是 PCP4，是被镜像决定的：openEuler 构建的 launcher 没有 `--pcp-size`，vllm 也没有 `--prefill-context-parallel-size`，PCP 用不了。`TP4 × DP4` 同样占满 16 卡，只是长序列切成 4 份的方式从序列并行变成张量并行。
 
 每个形态目录里还有一张速查卡（`single/README.md` 等），现场照着那个走；下面这些是讲为什么这么配的。
 
@@ -37,9 +39,9 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，
 内网没有外网，脚本不会下载东西，镜像和权重先搬进去。
 
 ```bash
-# 镜像：有网的机器导出，拷过去，每台导入
-docker save quay.io/ascend/vllm-ascend:v0.30.0-a3 -o vllm-ascend-v0.30.0-a3.tar
-docker load -i vllm-ascend-v0.30.0-a3.tar
+# 镜像：有网的机器导出，拷过去，每台导入（注意 tag 带 -openeuler）
+docker save quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler -o vllm-ascend-v0.30.0-a3-openeuler.tar
+docker load -i vllm-ascend-v0.30.0-a3-openeuler.tar
 docker images | grep vllm-ascend
 
 # 权重：预下载到宿主机，只读挂进容器
@@ -54,7 +56,7 @@ ls /data/weights/DeepSeek-V4.1-Flash-1017-w4a8/config.json
 
 ```bash
 MODEL_PATH="/data/weights/DeepSeek-V4.1-Flash-1017-w4a8"
-IMAGE="quay.io/ascend/vllm-ascend:v0.30.0-a3"
+IMAGE="quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler"
 NIC_NAME="eth0"          # 业务口，不是管理口
 ```
 
@@ -90,19 +92,19 @@ curl --noproxy '*' http://127.0.0.1:8000/v1/chat/completions \
 
 先看四台 2P2D（`pd-2p2d/`）：
 
-| 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
-|---|---|---|---|---|---|
-| P1 | Prefill | 4 / 1 / 4 | 0–3 | 0–15 | 7100–7103 |
-| P2 | Prefill | 4 / 1 / 4 | 4–7 | 0–15 | 7100–7103 |
-| D1 | Decode | 16 / 1 / 1 | 0–15 | 0–15 | 7100–7115 |
-| D2 | Decode | 16 / 1 / 1 | 16–31 | 0–15 | 7100–7115 |
+| 节点 | 角色 | 本地 DP / TP | 全局 rank | 逻辑设备 | 端口 |
+|---|---|---|---|---|
+| P1 | Prefill | 4 / 4 | 0–3 | 0–15 | 7100–7103 |
+| P2 | Prefill | 4 / 4 | 4–7 | 0–15 | 7100–7103 |
+| D1 | Decode | 16 / 1 | 0–15 | 0–15 | 7100–7115 |
+| D2 | Decode | 16 / 1 | 16–31 | 0–15 | 7100–7115 |
 
-Prefill 全局 DP8，8 个引擎 ×（TP1 × PCP4）= 32 卡。Decode 全局 DP32，32 个引擎 × TP1 = 32 卡。合起来 64 卡，正好四台。
+Prefill 全局 DP8，8 个引擎 × TP4 = 32 卡。Decode 全局 DP32，32 个引擎 × TP1 = 32 卡。合起来 64 卡，正好四台。
 
 ```
 客户端 → PD Proxy:1999
-              ├─→ P1 (DP4·PCP4) ─┐
-              ├─→ P2 (DP4·PCP4) ─┤ KV producer 30000+rank
+              ├─→ P1 (DP4·TP4) ─┐
+              ├─→ P2 (DP4·TP4) ─┤ KV producer 30000+rank
               │                  ↓
               └─→ D1 (DP16) ←──  KV consumer 30100+rank
                   D2 (DP16)
@@ -155,10 +157,10 @@ bash check.sh        # 后端 → 代理 → 经代理的真实推理
 
 只有两台机器时就是 1P1D：一台全做 Prefill，一台全做 Decode。每台的引擎配比和上面一样，所以参数、镜像、权重都不用动。
 
-| 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
-|---|---|---|---|---|---|
-| P1 | Prefill | 4 / 1 / 4 | 0–3 | 0–15 | 7100–7103 |
-| D1 | Decode | 16 / 1 / 1 | 0–15 | 0–15 | 7100–7115 |
+| 节点 | 角色 | 本地 DP / TP | 全局 rank | 逻辑设备 | 端口 |
+|---|---|---|---|---|
+| P1 | Prefill | 4 / 4 | 0–3 | 0–15 | 7100–7103 |
+| D1 | Decode | 16 / 1 | 0–15 | 0–15 | 7100–7115 |
 
 全局 DP 变成 P 4、D 16，connector 里也跟着变成 `{"prefill":{"dp_size":4,...},"decode":{"dp_size":16,...}}`——这两个数是 `config.env` 算出来的，`run_p.sh` / `run_d.sh` 不用改。
 
@@ -189,13 +191,13 @@ Prefill 那台会同时有 `dsv41-1p1d-prefill` 和 `dsv41-1p1d-proxy` 两个容
 
 P 侧多一台就是 3P2D：三台 Prefill、两台 Decode，共 80 卡。
 
-| 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
-|---|---|---|---|---|---|
-| P1 | Prefill | 4 / 1 / 4 | 0–3 | 0–15 | 7100–7103 |
-| P2 | Prefill | 4 / 1 / 4 | 4–7 | 0–15 | 7100–7103 |
-| P3 | Prefill | 4 / 1 / 4 | 8–11 | 0–15 | 7100–7103 |
-| D1 | Decode | 16 / 1 / 1 | 0–15 | 0–15 | 7100–7115 |
-| D2 | Decode | 16 / 1 / 1 | 16–31 | 0–15 | 7100–7115 |
+| 节点 | 角色 | 本地 DP / TP | 全局 rank | 逻辑设备 | 端口 |
+|---|---|---|---|---|
+| P1 | Prefill | 4 / 4 | 0–3 | 0–15 | 7100–7103 |
+| P2 | Prefill | 4 / 4 | 4–7 | 0–15 | 7100–7103 |
+| P3 | Prefill | 4 / 4 | 8–11 | 0–15 | 7100–7103 |
+| D1 | Decode | 16 / 1 | 0–15 | 0–15 | 7100–7115 |
+| D2 | Decode | 16 / 1 | 16–31 | 0–15 | 7100–7115 |
 
 connector 随之变成 `prefill dp_size 12 / decode dp_size 32`，代理对外 44 个端点（12 + 32）。KV 端口是 `30000-30011` 和 `30100-30131`。
 
@@ -312,24 +314,24 @@ P 和 D 不一样的：
 | `gpu-memory-utilization` | 0.9 | 0.95 |
 | 调度 | 默认 | `--async-scheduling` |
 | 前缀缓存 | `--enable-prefix-caching` | `--no-enable-prefix-caching` |
-| SWA 重放 | `--swa-bounded-replay` | `--no-swa-bounded-replay` |
+| SWA 重放 | 不传（这个镜像不支持） | 不传 |
 | 图模式 | `--enforce-eager` | `cudagraph_mode=FULL_DECODE_ONLY` |
 | `additional-config` | `fused_mc2=2`（MegaMoE），多流关 | 多流开，`recompute_scheduler_enable=true` |
 | `HCCL_BUFFSIZE` | 1024 | 4096 |
 | KV 角色 | `kv_producer` 30000+rank | `kv_consumer` 30100+rank |
 
-这两份不要互相抄。把 Prefill 的 MegaMoE 或 PCP 搬到 Decode，或者反过来把图模式、多流、重计算搬到 Prefill，轻则掉性能，重则起不来。
+这两份不要互相抄。把 Prefill 的 MegaMoE 搬到 Decode，或者反过来把图模式、多流、重计算搬到 Prefill，轻则掉性能，重则起不来。
 
 connector 的拓扑两侧必须一模一样，否则连接器初始化就失败：
 
 ```json
 {
-  "prefill": {"dp_size": 8,  "tp_size": 1},
+  "prefill": {"dp_size": 8,  "tp_size": 4},
   "decode":  {"dp_size": 32, "tp_size": 1}
 }
 ```
 
-这两个数在两个脚本里都是从 `config.env` 的 `P_DP_SIZE` / `D_DP_SIZE` 带进去的，不要手改。PCP 只由 `--prefill-context-parallel-size` 表达，别写进 connector 的 `tp_size` —— 排错时最容易改错的就是这里。
+`dp_size` 和 `tp_size` 都是从 `config.env` 带进去的，不要手改。`tp_size` 就是各侧的 `*_TP`：P 侧 4、D 侧 1。排错时最容易改错的就是这里——两侧不一致，连接器初始化直接失败。
 
 ## 踩过的坑
 
@@ -339,9 +341,9 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 **KV 端口没放开，表现是挂住，不是报错。** `30000+rank` 和 `30100+rank` 那两段跨节点被拦的时候，请求一直等 KV 传输。看到"后端全绿、代理正常、请求 180 秒超时"，先查这两段（2P2D 是 40 个，3P2D 是 44 个）。
 
-**`unrecognized arguments: --pcp-size`。** 镜像里的 `launch_online_dp.py` 版本比较老，用法里没有这个参数。脚本现在启动前跑一次 `-h`，**它支持哪个参数才传哪个**；老版本只给模板传 7 个位置参数，所以 `run_p.sh` 的 PCP 从第 8 个参数取、取不到就回落到 `config.env`。
+**`unrecognized arguments: --pcp-size`。** 这个镜像（openEuler 构建）的 launcher 用法只到 `--vllm-start-port`，没有 PCP；vllm 也没有 `--prefill-context-parallel-size`。所以 P 侧靠 `TP4 × DP4` 占满 16 卡，`config.env` 里 `PREFILL_PCP=1`，模板在 PCP=1 时整条参数不传。`start.sh` 仍会先跑一次 `-h` 协商，换镜像时不用改脚本。
 
-但老 launcher 不知道 PCP，每个引擎只按 TP 分卡，PCP4 会有一半卡闲置——`npu-smi` 上只有 4 张有显存占用就是没生效。这种要换镜像，或把 P 侧改成 `TP4 × DP4`（`PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`）。
+如果照着旧文档把 PCP 设成 4，表现是 `npu-smi` 上每台只有 4 张卡有显存占用——不报错，但一半卡在闲置。看到这个先查 `PREFILL_TP`。
 
 **`unrecognized arguments: --no-swa-bounded-replay`。** 模板里的 vllm 参数是按较新的镜像写的，老版本的 vllm 不认 SWA 重放这两个开关，已经在 `run_p.sh` / `run_d.sh` 里去掉并留了注释。**这类问题的正确解法不是一个个试**——每个都要等半小时启动：跑 `bash check-flags.sh`，一次把所有不认的参数列出来。
 

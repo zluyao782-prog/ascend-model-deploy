@@ -29,9 +29,9 @@ esac
 CTR="$CONTAINER_NAME-$ROLE"
 
 # 官方脚本随镜像分发，不落仓库（避免版本漂移）。
-# 路径默认是 vllm-ascend 0.30 的位置；报「镜像里找不到」时把 find 出来的目录
-# 填进 config.env 的 IMAGE_DIR，不用改这个脚本。
-IMAGE_DIR="${IMAGE_DIR:-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1}"
+# 默认路径是 openEuler 构建的位置；换镜像版本报「找不到」时，把 find 出来的目录
+# 填进 config.env 的 IMAGE_DIR（单机不走这里，只在 PD 用）。
+IMAGE_DIR="${IMAGE_DIR:-/vllm-workspace/vllm-ascend/examples/external_online_dp}"
 LAUNCHER="$IMAGE_DIR/launch_online_dp.py"
 PROXY="$IMAGE_DIR/load_balance_proxy_server_example.py"
 
@@ -39,7 +39,10 @@ PROXY="$IMAGE_DIR/load_balance_proxy_server_example.py"
 # 内网没有外网：镜像必须已经导入，否则 docker run 会尝试 pull 然后报网络错误
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
     echo "本机没有镜像：$IMAGE"
-    echo "先导入镜像包： docker load -i vllm-ascend-v0.30.0-a3.tar"
+    echo "先导入镜像包： docker load -i vllm-ascend-v0.30.0-a3-openeuler.tar"
+    echo "本机已有的 vllm-ascend 镜像（tag 不一样就改 config.env 的 IMAGE）："
+    docker images --format '    {{.Repository}}:{{.Tag}}' 2>/dev/null | grep vllm-ascend \
+        || echo "    （本机没有 vllm-ascend 镜像）"
     exit 1
 }
 

@@ -16,9 +16,9 @@ PROXY_NODE=""                          # 留空则用 P 组第一台
 
 PREFILL_DP_LOCAL=4      # 单台 P 起 4 个引擎
 DECODE_DP_LOCAL=16      # 单台 D 起 16 个引擎
-PREFILL_TP=1            # 单 rank 的 TP，通常 1，卡数靠 DP 堆
+PREFILL_TP=4            # 这个镜像没有 PCP，P 侧靠 TP 占满 16 卡
 DECODE_TP=1
-PREFILL_PCP=4           # 上下文并行，仅 Prefill
+PREFILL_PCP=1           # 仅官方构建支持 PCP；这个镜像恒为 1
 
 PREFILL_BASE_PORT=7100
 DECODE_BASE_PORT=7100
@@ -41,11 +41,13 @@ PROXY_PORT=1999
 
 ## 2. 官方脚本：从镜像里执行，不落仓库
 
-`launch_online_dp.py`（多机 DP 启动器）与 `load_balance_proxy_server_example.py`（代理）随镜像分发。抄进仓库就会随镜像版本漂移，所以 `start.sh` 直接执行镜像内的路径：
+`launch_online_dp.py`（多机 DP 启动器）与 `load_balance_proxy_server_example.py`（代理）随镜像分发。抄进仓库就会随镜像版本漂移，所以 `start.sh` 直接执行镜像内的路径。
+
+本仓库用的 openEuler 构建在 `external_online_dp/`，quay.io 官方构建在 `disaggregated_prefill_v1/`——**按 tag 猜路径会撞墙**，所以路径做成了 `config.env` 的 `IMAGE_DIR`：
 
 ```
-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/launch_online_dp.py
-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py
+/vllm-workspace/vllm-ascend/examples/external_online_dp/launch_online_dp.py
+/vllm-workspace/vllm-ascend/examples/external_online_dp/load_balance_proxy_server_example.py
 ```
 
 `start.sh` 启动前会先 `docker run --rm "$IMAGE" test -f` 确认文件在。换镜像版本后路径变了，它会明确提示并给出查找命令：
@@ -141,7 +143,7 @@ bash check.sh
 }
 ```
 
-这两组数在 `run_p.sh` / `run_d.sh` 里都由 `config.env` 的 `P_DP_SIZE` / `D_DP_SIZE` 自动代入，**不要手改成别的值**。PCP（`--prefill-context-parallel-size`）只由启动参数表达，不要写进 connector 的 `tp_size`。这是排错时最容易被误改的一处。
+这两组数在 `run_p.sh` / `run_d.sh` 里都由 `config.env` 的 `P_DP_SIZE` / `D_DP_SIZE` 自动代入，**不要手改成别的值**。`tp_size` 就是各侧的 `*_TP`：P 侧 4、D 侧 1。这是排错时最容易被误改的一处——两侧不一致，连接器初始化直接失败。
 
 ### A3 走 RoCE 时多三个变量
 
@@ -162,7 +164,7 @@ HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
 只动 `config.env` 两处：
 
 1. `*_NODES` 节点列表（顺序即 rank 顺序）；
-2. `*_DP_LOCAL` 使其乘 `*_TP × *_PCP` 等于单台卡数。
+2. `*_DP_LOCAL` 使其乘 `*_TP` 等于单台卡数（这个镜像 PCP 恒为 1）。
 
 rank 推导、全局 DP、端点数都是算出来的，脚本不用改。
 

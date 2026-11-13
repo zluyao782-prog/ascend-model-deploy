@@ -21,8 +21,14 @@ set -u
 . "${AE_CONFIG:-$(dirname "$0")/../../config.env}"
 
 RANK=$4
-# PCP 优先用 launcher 传来的第 8 个参数；老版本 launcher 只传 7 个，回落到 config
+# PCP 优先用 launcher 传来的第 8 个参数；这个构建的 launcher 只传 7 个，回落到 config
 PCP="${8:-${PREFILL_PCP:-1}}"
+
+# 这个镜像的 vllm 也没有 --prefill-context-parallel-size（PCP 恒为 1），传了会
+# unrecognized arguments。PCP=1 时整条不传；换到支持 PCP 的官方构建、把
+# PREFILL_PCP 改成 4 时，这里会自动带上。
+PCP_ARG=""
+[ "$PCP" != "1" ] && PCP_ARG="--prefill-context-parallel-size $PCP"
 
 # ---------------------------------------------------------------- 通信环境
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
@@ -51,7 +57,7 @@ export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/
 
 # ---------------------------------------------------------------- KV 生产端
 # 这里的 prefill/decode 的 dp_size 与 tp_size 必须与 D 侧写的一模一样，
-# 否则连接器初始化失败。PCP 只体现在 --prefill-context-parallel-size，不要写进 tp_size。
+# 否则连接器初始化失败。connector 的 tp_size 就是各自的 TP，PCP 不参与。
 KV_TRANSFER_CONFIG=$(cat <<JSON
 {
   "kv_connector": "$KV_CONNECTOR",
@@ -78,7 +84,7 @@ vllm serve "$MODEL_PATH" \
     --data-parallel-address "$5" \
     --data-parallel-rpc-port "$6" \
     --tensor-parallel-size "$7" \
-    --prefill-context-parallel-size "$PCP" \
+    $PCP_ARG \
     --served-model-name "$SERVED_MODEL_NAME" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-batched-tokens 8192 \

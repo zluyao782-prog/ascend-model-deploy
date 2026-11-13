@@ -35,7 +35,7 @@ bash stop.sh
 ## 1. 设计拓扑：三个数定全局
 
 ```
-单台卡数 = *_TP × *_PCP × *_DP_LOCAL
+单台卡数 = *_TP × *_DP_LOCAL（这个镜像 PCP 恒为 1）
 全局 DP  = *_DP_LOCAL × 该角色节点数
 ```
 
@@ -50,14 +50,14 @@ bash stop.sh
 | 长 prompt、短输出 | 3 台 | 1 台 |
 | 单机放得下 | 不拆，直接用 `single/` | |
 
-**换镜像或首次部署，先跑 `bash check-flags.sh`。** 模板里的 vllm 参数按较新镜像写的，老版本会 `unrecognized arguments`（比如 `--no-swa-bounded-replay`），而每次试错要等引擎堆半小时。这个脚本把参数逐个问 `vllm serve -h`，几秒列全。
+**换镜像或首次部署，先跑 `bash check-flags.sh`。** 模板里的参数是按当前镜像（openEuler 构建）能认的写的——SWA 两个开关和 PCP 参数都已经不传。换 tag 后仍有 `unrecognized arguments` 的话，靠这个脚本一次列全，别靠启动日志一个个试（每次要等引擎堆半小时）。
 
-launcher 的参数在不同镜像版本里不一样：老版本没有 `--pcp-size`，硬传会 `unrecognized arguments` 直接退出。脚本已按能力探测（`PCP=1` 不传、`PCP>1` 先看 `-h`），模板也兼容只传 7 个位置参数的老版本。但老 launcher 不知道 PCP，可能每个引擎只分 TP 张卡——`npu-smi` 上卡没占满就是没生效。
+**这个镜像没有 PCP。** launcher 的用法只到 `--vllm-start-port`（7 个位置参数），vllm 也没有 `--prefill-context-parallel-size`。所以 P 侧靠 `TP4 × DP4` 占满 16 卡，`PREFILL_PCP` 保持 1；模板在 PCP=1 时整条参数不传，`start.sh` 仍会先跑一次 `-h` 协商，换镜像不用改脚本。
 
 扩缩容只改节点列表和 `*_DP_LOCAL`：**每台的引擎配比不变**，所以 `run_p.sh` / `run_d.sh` 一个字都不用动，connector 里的 `dp_size` 也是 `config.env` 算出来的。
 
 - **Decode 偏好大 DP + 小 TP**：解码每步通信量与 TP 强相关，`TP1 × DP16` 是 16 卡机的常态。
-- **Prefill 偏好用 PCP 分担长序列**：`TP1 × PCP4 × DP4` 是常见解。
+- **Prefill 靠并行把长序列切开**：这个镜像没有 PCP，用 `TP4 × DP4`；官方构建可 `TP1 × PCP4 × DP4`。
 
 ## 1.5 rank 组网（A3 走 RoCE）
 
@@ -97,7 +97,7 @@ PREFILL_NODES="192.168.0.11 192.168.0.12"   # 顺序 = rank 顺序，第一台�
 DECODE_NODES="192.168.0.21 192.168.0.22"
 PROXY_NODE="192.168.0.11"                   # 留空则用 P 组第一台
 
-PREFILL_DP_LOCAL=4 ; PREFILL_TP=1 ; PREFILL_PCP=4
+PREFILL_DP_LOCAL=4 ; PREFILL_TP=4 ; PREFILL_PCP=1
 DECODE_DP_LOCAL=16 ; DECODE_TP=1
 ```
 
@@ -117,10 +117,10 @@ KV 端口被拦的表现是**请求挂住到超时，不是报错**。
 
 ## 3. 官方脚本：从镜像里执行，不落仓库
 
-`launch_online_dp.py` 与 `load_balance_proxy_server_example.py` 随镜像分发，`start.sh` 直接执行镜像内路径：
+`launch_online_dp.py` 与 `load_balance_proxy_server_example.py` 随镜像分发，`start.sh` 直接执行镜像内路径。openEuler 构建在 `external_online_dp/`，官方构建在 `disaggregated_prefill_v1/`——**不要按 tag 猜**，路径是 `config.env` 的 `IMAGE_DIR`：
 
 ```
-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/
+/vllm-workspace/vllm-ascend/examples/external_online_dp/
 ```
 
 启动前会 `docker run --rm "$IMAGE" test -f` 确认存在。换镜像版本后路径变了，它会明确提示并给出 `find` 命令；查到目录填进 `config.env` 的 `IMAGE_DIR` 即可，不用改脚本——**不要把它复制进仓库**，抄进来就会随镜像漂移。
@@ -194,7 +194,7 @@ bash check.sh backends     # 只查后端（代理启动前的闸门）
 {"prefill": {"dp_size": 8, "tp_size": 1}, "decode": {"dp_size": 32, "tp_size": 1}}
 ```
 
-PCP 只由 `--prefill-context-parallel-size` 表达，**不要写进 connector 的 `tp_size`**。这是排错时最容易被误改的一处。
+connector 的 `tp_size` 就是各侧的 `*_TP`（P 侧 4、D 侧 1），**两侧必须一致**。这是排错时最容易被误改的一处。
 
 ## 收尾
 

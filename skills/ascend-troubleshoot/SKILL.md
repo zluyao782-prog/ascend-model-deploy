@@ -134,7 +134,7 @@ curl --noproxy '*' -m 180 http://<proxy>:1999/v1/chat/completions \
 |---|---|---|
 | 后端未全部就绪 | 第 1 步点名 | 等每个 rank 打印 `Application startup complete.` |
 | KV 端口被防火墙拦 | 从 P 节点 `telnet <D_IP> 30100` | 放开 `30000-30031` |
-| connector 两侧拓扑不一致 | 对比 P/D 模板的 `kv_connector_extra_config` | `dp_size` / `tp_size` 必须完全一致，PCP 不进 `tp_size` |
+| connector 两侧拓扑不一致 | 对比 P/D 模板的 `kv_connector_extra_config` | `dp_size` / `tp_size` 必须完全一致；`tp_size` 就是各侧的 TP（P 侧 4、D 侧 1） |
 | 启动顺序错（先 P 后 D） | 看日志时间戳 | 严格 D → P → Proxy |
 
 > **KV 端口不通的表现是挂住到超时，不是报错。** 看到"能连上代理、请求 180s 超时、后端全绿"，先查 KV 端口，不要怀疑模型。

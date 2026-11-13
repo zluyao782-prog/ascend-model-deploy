@@ -26,7 +26,7 @@ description: 昇腾 vLLM Ascend 服务的性能调优与基线管理，含 TP/DP
 | 角色 | 偏好 | 理由 |
 |---|---|---|
 | Decode | 大 DP + 小 TP（16 卡机常见 `TP1 × DP16`） | 解码每步通信量与 TP 强相关，TP 越大跨卡同步开销越明显 |
-| Prefill | 用 PCP 分担长序列（常见 `TP1 × PCP4 × DP4`） | 长 prompt 的注意力需要把序列切开 |
+| Prefill | 用并行把长序列切开（openEuler 构建 `TP4 × DP4`；官方构建可 `TP1 × PCP4 × DP4`） | 长 prompt 的注意力最吃显存和算力 |
 | 权重单卡放不下 | TP 必须 > 1 | 先满足"放得下"，再谈性能 |
 
 `gpu-memory-utilization`：`0.9` 起步，Decode 可推到 `0.95`（KV cache 越多并发越高）。峰值显存不只由权重决定——图捕获、临时 buffer 都算在内。推到 0.95 后出现不定期 OOM，先降到 0.92，别急着怀疑框架。

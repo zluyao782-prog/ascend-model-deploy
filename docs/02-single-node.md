@@ -18,7 +18,7 @@ vim config.env
 
 ```bash
 MODEL_PATH="/data/weights/Qwen3-32B"     # 权重绝对路径，宿主机=容器内
-IMAGE="quay.io/ascend/vllm-ascend:v0.30.0-a3"
+IMAGE="quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler"   # openEuler 构建，tag 带后缀
 NIC_NAME="eth0"
 
 SINGLE_TP=4

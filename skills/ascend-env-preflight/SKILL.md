@@ -26,10 +26,10 @@ description: 昇腾 NPU 部署前的环境体检、内网镜像准备与环境�
 
 ```bash
 # 有网的机器导出 → 拷到现场
-docker save quay.io/ascend/vllm-ascend:v0.30.0-a3 -o vllm-ascend-v0.30.0-a3.tar
+docker save quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler -o vllm-ascend-v0.30.0-a3-openeuler.tar
 
 # 每台现场机器导入
-docker load -i vllm-ascend-v0.30.0-a3.tar
+docker load -i vllm-ascend-v0.30.0-a3-openeuler.tar
 docker images | grep vllm-ascend
 ```
 

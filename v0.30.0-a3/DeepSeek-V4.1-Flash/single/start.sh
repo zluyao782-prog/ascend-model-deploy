@@ -18,7 +18,10 @@ cd "$(dirname "$0")"
 # 内网没有外网：镜像必须已经导入本地，否则 docker run 会尝试 pull 然后报网络错误
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
     echo "本机没有镜像：$IMAGE"
-    echo "先导入镜像包： docker load -i vllm-ascend-v0.30.0-a3.tar"
+    echo "先导入镜像包： docker load -i vllm-ascend-v0.30.0-a3-openeuler.tar"
+    echo "本机已有的 vllm-ascend 镜像（tag 不一样就改 config.env 的 IMAGE）："
+    docker images --format '    {{.Repository}}:{{.Tag}}' 2>/dev/null | grep vllm-ascend \
+        || echo "    （本机没有 vllm-ascend 镜像）"
     exit 1
 }
 

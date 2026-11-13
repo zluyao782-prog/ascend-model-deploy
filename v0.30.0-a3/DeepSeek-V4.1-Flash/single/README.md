@@ -15,7 +15,7 @@ vim config.env
 | 字段 | 填什么 |
 |---|---|
 | `MODEL_PATH` | 权重绝对路径，宿主机和容器内一致 |
-| `IMAGE` | 现场已 `docker load` 的那个 tag |
+| `IMAGE` | 默认 `quay.io/ascend/vllm-ascend:v0.30.0-a3-openeuler`，要和现场 `docker load` 进来的 tag 完全一致 |
 | `NIC_NAME` | 业务口，不是管理口 |
 
 `MAX_MODEL_LEN` 默认 128K。显存不够先降这个。
