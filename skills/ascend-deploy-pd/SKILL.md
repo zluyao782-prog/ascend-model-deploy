@@ -73,9 +73,17 @@ HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
 
 ## 1.6 Mooncake 池化
 
-`kv_connector` 用 Mooncake 时 KV 本身就走 Mooncake 通道。要接共享池，脚本额外注入 master 地址（`KV_POOL` / `MOONCAKE_MASTER`）。
+池化要三样：跑着的 `mooncake_master`、每台一份 `mooncake.json`、指向它的 `MOONCAKE_CONFIG_PATH`。模板里只读环境变量，json 由 `start.sh` 按 `config.env` 生成。
 
-给现场提这条时要说清楚边界：**脚本只注入环境变量，不改 `kv_transfer_config` 的 JSON**——多一个 vllm 不认识的键会直接启动失败，多一个环境变量无害。如果镜像里的 mooncake 版本要求把池地址写进 JSON，改模板里 `KV_TRANSFER_CONFIG` 那一段（有注释标位置）。另外全局 KV 池依赖独立的 master / metadata 服务先起来，这事不在脚本范围内。
+**内存是按引擎乘出来的**，不是整机给一个数：
+
+```
+单台池化占用 ≈ 引擎数 × (global_segment_size + local_buffer_size)
+```
+
+D 那台 16 引擎、段填 2GB，就是 32G 段 + 16G 缓冲 = 48G，要叠加在原本的主机内存账上。段是显式预留并注册给传输引擎的，`free` 里直接少掉，不是按需增长。内存紧的话用 `standalone-store` 模式，引擎侧段设 0。
+
+默认值给的是 2GB / 1GB，现场先按这个起，压测看命中率再往上加——一次给到 8GB/rank，D 台就是 128G，很容易 OOM。
 
 ## 2. 改 `config.env`：只有节点与拓扑
 

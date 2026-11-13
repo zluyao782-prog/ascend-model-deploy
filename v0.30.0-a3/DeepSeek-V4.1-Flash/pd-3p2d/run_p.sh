@@ -41,10 +41,9 @@ export HCCL_INTRA_ROCE_ENABLE="$HCCL_INTRA_ROCE_ENABLE"
 export HCCL_IF_BASE_PORT="$HCCL_IF_BASE_PORT"
 
 # ---------------------------------------------------------------- Mooncake 池化
-# 只注入环境变量，不改 connector 的 JSON：多一个不认识的键，vllm 会直接起不来。
-# 如果镜像里的 mooncake 要求写进 kv_transfer_config，改下面 KV_TRANSFER_CONFIG 那段。
-export MOONCAKE_POOL="$KV_POOL"
-[ -n "$MOONCAKE_MASTER" ] && export MOONCAKE_MASTER
+# 每个引擎按这份 json 里的 global_segment_size 往共享池贡献内存。
+# 路径由 start.sh 用 -e 传进来；单独手跑时回落到 ../../.run/mooncake.json
+export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/mooncake.json}"
 
 # ---------------------------------------------------------------- KV 生产端
 # 这里的 prefill/decode 的 dp_size 与 tp_size 必须与 D 侧写的一模一样，

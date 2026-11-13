@@ -69,6 +69,20 @@ for p in /usr/local/Ascend/driver /usr/local/dcmi /usr/local/bin/npu-smi /etc/as
 done
 MOUNTS="$MOUNTS -v $MODEL_PATH:$MODEL_PATH -v $PWD:$PWD"
 
+# ---------------------------------------------------------------- Mooncake 池化
+# 官方做法是每个引擎读 MOONCAKE_CONFIG_PATH 指向的 json，按 global_segment_size
+# 贡献内存给共享池。这里用它把 config.env 的值落成文件，避免五台手改 json。
+MC_ENV=""
+if [ "$KV_POOL" = "on" ]; then
+    mkdir -p "$PWD/.run"
+    sed -e "s|@MASTER@|$MOONCAKE_MASTER|" \
+        -e "s|@SEGMENT@|$MOONCAKE_SEGMENT|" \
+        -e "s|@BUFFER@|$MOONCAKE_BUFFER|" \
+        "$PWD/mooncake.json" > "$PWD/.run/mooncake.json"
+    MC_ENV="-e MOONCAKE_CONFIG_PATH=$PWD/.run/mooncake.json"
+    echo "Mooncake 池化：master=$MOONCAKE_MASTER，每引擎 $MOONCAKE_SEGMENT + $MOONCAKE_BUFFER"
+fi
+
 # =============================================================================
 # 角色 1 / 2：Prefill 或 Decode 节点
 # =============================================================================
@@ -132,6 +146,13 @@ if [ "$ROLE" != "proxy" ]; then
     echo "   TP / PCP    : $TP / $PCP"
     echo "   DP 协调地址 : $DP_ADDR:$DP_RPC_PORT"
     echo "   引擎端口    : $BASE_PORT - $((BASE_PORT + EACH - 1))"
+    if [ "$KV_POOL" = "on" ]; then
+        seg=${MOONCAKE_SEGMENT%GB}; buf=${MOONCAKE_BUFFER%GB}
+        case "$seg$buf" in
+            *[!0-9]* ) echo "   池化内存    : 每引擎 $MOONCAKE_SEGMENT + $MOONCAKE_BUFFER（本机 $EACH 个引擎）" ;;
+            * ) echo "   池化内存    : 本机约 $((EACH * seg + EACH * buf)) GB（$EACH 引擎 × ($MOONCAKE_SEGMENT + $MOONCAKE_BUFFER)）" ;;
+        esac
+    fi
     echo
 
     docker rm -f "$CTR" >/dev/null 2>&1 || true
@@ -146,6 +167,7 @@ if [ "$ROLE" != "proxy" ]; then
         -w "$RUNDIR" \
         -e HCCL_IF_IP="$MY_IP" \
         -e AE_CONFIG="$PWD/config.env" \
+        $MC_ENV \
         "$IMAGE" \
         python3 "$LAUNCHER" \
         --dp-size "$GLOBAL_DP" \

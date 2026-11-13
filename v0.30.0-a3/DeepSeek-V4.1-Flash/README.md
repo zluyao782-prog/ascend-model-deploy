@@ -229,16 +229,53 @@ docker inspect dsv41-3p2d-decode --format '{{range .Config.Env}}{{println .}}{{e
 
 #### Mooncake 池化
 
-`KV_CONNECTOR=MooncakeHybridConnector` 这一层本来就走 Mooncake 的传输通道，KV 不直连，而是经 Mooncake 中转。`KV_POOL=on` 时脚本额外把 master 地址注入进去：
+池化要三样东西：一个跑着的 `mooncake_master`、每台一份 `mooncake.json`、以及指向它的 `MOONCAKE_CONFIG_PATH`。脚本把中间那步接了：
 
 ```bash
 KV_POOL="on"
-MOONCAKE_MASTER=""      # 留空取 P 组第一台
+MOONCAKE_MASTER=""             # 留空取 P 组第一台 + :50099
+MOONCAKE_SEGMENT="2GB"         # 每个引擎贡献的段
+MOONCAKE_BUFFER="1GB"          # 每个引擎的本地收发缓冲
 ```
 
-这里有个边界要说清楚：**脚本只注入环境变量，不改 connector 的 JSON。** 因为 `kv_transfer_config` 里多一个 vllm 不认识的键会直接启动失败，而多一个环境变量是无害的。
+`start.sh` 用这四个值把 `mooncake.json` 填出来（落在 `.run/`），再 `-e MOONCAKE_CONFIG_PATH` 传给容器。所以五台不用手改 json，改 `config.env` 就够。
 
-如果现场的镜像里 mooncake 版本要求把池地址写进 `kv_transfer_config`（不同版本键名不一样），改 `run_p.sh` / `run_d.sh` 里 `KV_TRANSFER_CONFIG` 那一段，位置有注释标着。另外，跨请求的全局 KV 池还需要 master / metadata 服务先在跑——这件事不在脚本范围内。`KV_POOL=on` 而 master 没起，表现就是连接器指向一个不存在的地址。
+**内存是乘出来的，不是加出来的。** `global_segment_size` 是「每个引擎向池子贡献多少」，vLLM 里一个引擎一个进程一个客户端：
+
+```
+单台池化占用 ≈ 引擎数 × (global_segment_size + local_buffer_size)
+```
+
+按现在 2GB / 1GB 的配法：
+
+| 节点 | 引擎数 | 段 | 缓冲 | 合计 |
+|---|---|---|---|---|
+| P1–P3 | 4 | 8 GB | 4 GB | **约 12 GB** |
+| D1–D2 | 16 | 32 GB | 16 GB | **约 48 GB** |
+
+这段要和主机内存的底账叠加：D 那台 16 个引擎加 Engram offload，`HOST_MEM_MIN_GB` 已经写了 384G，再加 48G。所以 D 台准备 512G 起比较稳，宽裕就到 768G。启动时脚本会把本机要占多少打印出来，跑之前能先看一眼。
+
+**这段内存是显式预留并注册给传输引擎的**，不是"用了才涨"，`free` 里会直接少掉，别按缓存去算它的账。
+
+master 起在任何一台（一般是代理那台）：
+
+```bash
+mooncake_master --port 50099 \
+  --default_kv_lease_ttl 11000 \
+  --eviction_high_watermark_ratio 0.9 \
+  --eviction_ratio 0.1
+```
+
+`50099` 要和 `config.env` 的 `MOONCAKE_MASTER_PORT` 对上。
+
+内存实在紧的话还有个办法：用 `standalone-store` 模式，让单独的 store 服务持有池子，引擎一侧的 `global_segment_size` 设 0，rank 就完全不占内存。代价是多一个服务要维护，而且它挂了池子就没了。
+
+确认配置真的进了容器：
+
+```bash
+docker exec dsv41-3p2d-decode cat /proc/1/environ | tr '\0' '\n' | grep MOONCAKE
+docker exec dsv41-3p2d-decode cat "$(docker exec dsv41-3p2d-decode printenv MOONCAKE_CONFIG_PATH)"
+```
 
 ## 参数
 
@@ -289,7 +326,9 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 **代理 `/healthcheck` 200 不代表可用。** 它只反映注册了多少实例。必须逐个后端 `GET /health` 过了再打业务请求，否则就是"代理 200 但请求卡住"。`start.sh proxy` 已经把这一步做成就绪闸。
 
-**KV 端口没放开，表现是挂住，不是报错。** 30000–30007 和 30100–30131 跨节点被拦的时候，请求一直等 KV 传输。看到"后端全绿、代理正常、请求 180 秒超时"，先查这 40 个端口。
+**KV 端口没放开，表现是挂住，不是报错。** `30000+rank` 和 `30100+rank` 那两段跨节点被拦的时候，请求一直等 KV 传输。看到"后端全绿、代理正常、请求 180 秒超时"，先查这两段（2P2D 是 40 个，3P2D 是 44 个）。
+
+**池化把主机内存吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开池化之前先按「引擎数 ×（段 + 缓冲）」算一遍。
 
 **内网没有镜像就 `docker run`，会卡到超时。** 这是内网最常见的一类"莫名其妙的报错"。现在脚本先 `docker image inspect`，缺镜像直接提示去 load。
 

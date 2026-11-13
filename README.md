@@ -33,7 +33,7 @@ ascend-model-deploy/
 
 `pd-1p1d/`（2 台）、`pd-2p2d/`（4 台）、`pd-3p2d/`（5 台）现在都有。每台的引擎配比是一样的（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），只有节点数和 P/D 各几台不同，所以扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
 
-`pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 池化的 master 地址。这几项五台必须一致，改完要整体重启，细节写在模型 README 的「五台 3P2D」里。
+`pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 池化的 master 地址。这几项五台必须一致，改完要整体重启。池化占的主机内存是**按引擎数乘**的（D 台 16 个引擎，段填 2GB 就是 32G 再加缓冲），开之前先算一遍。细节写在模型 README 的「五台 3P2D」里。
 
 有几个地方是栽过跟头的：
 
