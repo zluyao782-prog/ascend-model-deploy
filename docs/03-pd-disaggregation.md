@@ -143,6 +143,20 @@ bash check.sh
 
 这两组数在 `run_p.sh` / `run_d.sh` 里都由 `config.env` 的 `P_DP_SIZE` / `D_DP_SIZE` 自动代入，**不要手改成别的值**。PCP（`--prefill-context-parallel-size`）只由启动参数表达，不要写进 connector 的 `tp_size`。这是排错时最容易被误改的一处。
 
+### A3 走 RoCE 时多三个变量
+
+节点数上去以后（3P2D 起步），A3 上常见做法是让 HCCL 显式走 RoCE：
+
+```bash
+HCCL_INTER_HCCS_DISABLE="TRUE"   # 跨机不走 HCCS，改走 RoCE
+HCCL_INTRA_ROCE_ENABLE=1         # 机内也走 RoCE，不用机内 HCCS
+HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
+```
+
+写进 `config.env` 由模板统一 export，两条要记住：**所有节点必须完全一致**（差一个值就是建链卡住或只连上一部分 rank，不会告诉你哪台配错）；**只在进程启动时读一次**，改完要整体重启。数据面从 `NIC_NAME` 出，MTU/PFC 要和交换机对齐，`HCCL_IF_BASE_PORT` 起的端口段在防火墙上整段放开。
+
+确认变量进了容器：`docker inspect <容器> --format '{{range .Config.Env}}{{println .}}{{end}}' | grep HCCL_`
+
 ## 8. 换拓扑怎么改
 
 只动 `config.env` 两处：

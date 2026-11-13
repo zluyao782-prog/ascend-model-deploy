@@ -17,7 +17,8 @@ ascend-model-deploy/
         ├── README.md
         ├── single/   config.env  serve.sh  start.sh  check.sh  stop.sh
         ├── pd-1p1d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
-        └── pd-2p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
+        ├── pd-2p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
+        └── pd-3p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
 ```
 
 进到某个形态目录，要改的基本只有 `config.env`。模型参数在 `serve.sh` / `run_p.sh` / `run_d.sh` 里，打开就是一条 `vllm serve`，参数一行一个。`start.sh`、`check.sh`、`stop.sh` 平时不用动。
@@ -30,7 +31,9 @@ ascend-model-deploy/
 | `pd-<P>p<D>/` | `examples/disaggregated_prefill_v1/` | P、D 各自独立 dp/tp/pcp；走 Mooncake；proxy 端点列表长度必须等于 P+D 的实例数 |
 | `pd-colocated/`（如果要加） | 同 PD | 单机内分卡组，端口段不能重叠，`gpu-memory-utilization` 按卡算 |
 
-`pd-1p1d/` 和 `pd-2p2d/` 现在都有：前者两台各跑一个角色，后者每侧两台。每台的引擎配比是一样的，所以 `run_p.sh` / `run_d.sh` 两份文件内容相同，扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
+`pd-1p1d/`（2 台）、`pd-2p2d/`（4 台）、`pd-3p2d/`（5 台）现在都有。每台的引擎配比是一样的（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），只有节点数和 P/D 各几台不同，所以扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
+
+`pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 池化的 master 地址。这几项五台必须一致，改完要整体重启，细节写在模型 README 的「五台 3P2D」里。
 
 有几个地方是栽过跟头的：
 
@@ -82,7 +85,7 @@ bash start.sh proxy       # 还在 Prefill 那台，等后端全绿
 bash check.sh
 ```
 
-PD 分离，4 台 2P2D：目录换成 `pd-2p2d`，命令一样，只是每侧多起一台（D1→D2、P1→P2）。
+PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每侧多起几台（D1→D2、P1→P2→P3）。3P2D 多一份 rank 组网配置，见模型 README。
 
 顺序别颠倒。Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是卡住、不报错，很容易误判成权重加载慢。代理也一样，后端没全绿就起，客户端只会等到超时——代理自己的 `/healthcheck` 返回 200 只说明注册了几个实例，不代表能用。
 

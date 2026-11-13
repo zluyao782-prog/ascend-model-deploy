@@ -1,6 +1,6 @@
 ---
 name: ascend-deploy-pd
-description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-1p1d、pd-2p2d、双机部署、Mooncake、启动顺序、代理端点、KV 传输、dp-rank。
+description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-1p1d、pd-2p2d、pd-3p2d、双机部署、3P2D、rank 组网、HCCL_INTER_HCCS_DISABLE、Mooncake 池化、启动顺序、代理端点、KV 传输、dp-rank。
 ---
 
 # PD 分离部署（`pd-<P>p<D>/` 形态）
@@ -18,7 +18,7 @@ Prefill 吃算力、Decode 吃显存带宽，拆开各自扩缩。代价是多�
 ## 现场只有一条命令（每台按角色执行）
 
 ```bash
-cd <版本>/<模型>/pd-2p2d    # 两台机器就用 pd-1p1d，命令一样
+cd <版本>/<模型>/pd-2p2d    # 两台用 pd-1p1d、五台用 pd-3p2d，命令一样
 vim config.env          # 每台用同一份
 
 bash start.sh decode    # 每个 Decode 节点，D1 先
@@ -45,6 +45,7 @@ bash stop.sh
 |---|---|---|
 | 平衡（默认） | 每台 4 引擎 × 2 台 → DP8 | 每台 16 引擎 × 2 台 → DP32 |
 | 只有两台机器 | 1 台 → DP4 | 1 台 → DP16 |
+| P 侧吃紧（5 台） | 3 台 × 4 引擎 → DP12 | 2 台 × 16 引擎 → DP32 |
 | 长输出、低并发 prompt | 1 台 | 3 台 |
 | 长 prompt、短输出 | 3 台 | 1 台 |
 | 单机放得下 | 不拆，直接用 `single/` | |
@@ -54,10 +55,32 @@ bash stop.sh
 - **Decode 偏好大 DP + 小 TP**：解码每步通信量与 TP 强相关，`TP1 × DP16` 是 16 卡机的常态。
 - **Prefill 偏好用 PCP 分担长序列**：`TP1 × PCP4 × DP4` 是常见解。
 
+## 1.5 rank 组网（A3 走 RoCE）
+
+节点数上去以后（3P2D 起步），A3 上常见做法是显式让 HCCL 走 RoCE 而不是默认路径：
+
+```bash
+HCCL_INTER_HCCS_DISABLE="TRUE"   # 跨机不走 HCCS，改走 RoCE
+HCCL_INTRA_ROCE_ENABLE=1         # 机内也走 RoCE
+HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
+```
+
+放在 `config.env` 里由模板统一 export，三条纪律：
+
+1. **所有节点必须完全一样**。差一个值就是建链卡住或只连上一部分 rank，报错不会告诉你是哪台配错了，只能逐台 `docker inspect ... | grep HCCL_` 比。
+2. **只在进程启动时读一次**。改完必须整体 `stop.sh` + `start.sh`，热改无效。
+3. 数据面从 `NIC_NAME` 出去，MTU/PFC 要和交换机侧对齐；`HCCL_IF_BASE_PORT` 起的端口段在防火墙上整段放开（建议 `52000-52999`）。
+
+## 1.6 Mooncake 池化
+
+`kv_connector` 用 Mooncake 时 KV 本身就走 Mooncake 通道。要接共享池，脚本额外注入 master 地址（`KV_POOL` / `MOONCAKE_MASTER`）。
+
+给现场提这条时要说清楚边界：**脚本只注入环境变量，不改 `kv_transfer_config` 的 JSON**——多一个 vllm 不认识的键会直接启动失败，多一个环境变量无害。如果镜像里的 mooncake 版本要求把池地址写进 JSON，改模板里 `KV_TRANSFER_CONFIG` 那一段（有注释标位置）。另外全局 KV 池依赖独立的 master / metadata 服务先起来，这事不在脚本范围内。
+
 ## 2. 改 `config.env`：只有节点与拓扑
 
 ```bash
-MODEL_PATH="/data/weights/..."              # 4 台必须同一绝对路径
+MODEL_PATH="/data/weights/..."              # 所有节点必须同一绝对路径
 PREFILL_NODES="192.168.0.11 192.168.0.12"   # 顺序 = rank 顺序，第一台兼 DP 协调
 DECODE_NODES="192.168.0.21 192.168.0.22"
 PROXY_NODE="192.168.0.11"                   # 留空则用 P 组第一台

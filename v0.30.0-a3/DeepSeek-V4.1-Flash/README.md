@@ -17,17 +17,16 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，
 
 ## 单机还是 PD
 
-| | `single/` | `pd-1p1d/` | `pd-2p2d/` |
+| 目录 | 机器 | 拓扑 | 什么时候用 |
 |---|---|---|---|
-| 硬件 | A3 × 1，16 卡 | A3 × 2，32 卡 | A3 × 4，64 卡 |
-| 拓扑 | DP4 × TP4 | P: DP4（PCP4）+ D: DP16 | P: DP8（PCP4）+ D: DP32 |
-| 上下文 | 建议 128K 起 | 能到 1M | 能到 1M |
-| 什么时候用 | POC、功能验证、小并发 | 现场只有两台，或者先做小规模 PD 验证 | 长 prompt、高并发、交付预演 |
-| 多机网络 | 不需要 | 两台之间放开 20 个 KV 端口 | 四台，40 个 KV 端口 |
+| `single/` | 1 台，16 卡 | DP4 × TP4 | POC、功能验证、小并发 |
+| `pd-1p1d/` | 2 台，32 卡 | P: DP4（PCP4）+ D: DP16 | 现场只有两台，或先做小规模 PD 验证 |
+| `pd-2p2d/` | 4 台，64 卡 | P: DP8（PCP4）+ D: DP32 | 常规交付：长 prompt、高并发 |
+| `pd-3p2d/` | 5 台，80 卡 | P: DP12（PCP4）+ D: DP32 | P 侧吃紧、要走 A3 rank 组网 + Mooncake 池化 |
 
 建议先单机跑通再上 PD。单机能跑说明权重、镜像、CANN 三者匹配，PD 无非多引入网络和 KV 传输两个变量，出问题范围小得多。
 
-`pd-1p1d` 和 `pd-2p2d` 是同一份东西的两种规模：**每台的引擎配比完全一样**（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），区别只是各几台。所以 `run_p.sh`、`run_d.sh` 两边一模一样，扩缩容只改 `config.env` 里的节点列表和 `*_DP_LOCAL`，脚本一个字都不动。
+四个 PD 目录是同一份东西的不同规模：**每台的引擎配比完全一样**（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），区别只是各几台。所以 `run_p.sh`、`run_d.sh` 在几套之间只差 rank 组网那几行，扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
 
 另外官方对 PD 分离的表述是「参考设计，不建议直接用于生产」，生产推荐 MindIE Motor 加 vLLM Ascend。这个目录是拿来做验证、评测和交付预演的。
 
@@ -183,6 +182,63 @@ bash start.sh proxy
 Prefill 那台会同时有 `dsv41-1p1d-prefill` 和 `dsv41-1p1d-proxy` 两个容器，各自独立。就绪条数：Decode 16 条，Prefill 4 条。
 
 两台之间的防火墙放开 `7100-7115`、`12321`、`30000-30003`、`30100-30115` 就行，比四台少了 D2 那一段。上下文仍然按 1M 配，但 Decode 只有 16 个引擎，并发能撑住的量是 2P2D 的一半；如果压测时显存吃紧，先把 `MAX_MODEL_LEN` 降到 524288。
+
+### 五台 3P2D（`pd-3p2d/`）
+
+P 侧多一台就是 3P2D：三台 Prefill、两台 Decode，共 80 卡。
+
+| 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
+|---|---|---|---|---|---|
+| P1 | Prefill | 4 / 1 / 4 | 0–3 | 0–15 | 7100–7103 |
+| P2 | Prefill | 4 / 1 / 4 | 4–7 | 0–15 | 7100–7103 |
+| P3 | Prefill | 4 / 1 / 4 | 8–11 | 0–15 | 7100–7103 |
+| D1 | Decode | 16 / 1 / 1 | 0–15 | 0–15 | 7100–7115 |
+| D2 | Decode | 16 / 1 / 1 | 16–31 | 0–15 | 7100–7115 |
+
+connector 随之变成 `prefill dp_size 12 / decode dp_size 32`，代理对外 44 个端点（12 + 32）。KV 端口是 `30000-30011` 和 `30100-30131`。
+
+```bash
+PREFILL_NODES="192.168.0.11 192.168.0.12 192.168.0.13"
+DECODE_NODES="192.168.0.21 192.168.0.22"
+PROXY_NODE="192.168.0.11"
+```
+
+启动：两台 Decode 先，再三台 Prefill，最后在 P1 起代理。就绪条数 Decode 32 条、Prefill 12 条。
+
+#### rank 组网（A3 走 RoCE）
+
+节点一多，HCCL 默认路径在跨机上容易出问题，A3 上常见的做法是显式指定走 RoCE：
+
+```bash
+HCCL_INTER_HCCS_DISABLE="TRUE"   # 跨机不走 HCCS，改走 RoCE
+HCCL_INTRA_ROCE_ENABLE=1         # 机内也走 RoCE，不用机内 HCCS
+HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
+```
+
+这三项只在 `config.env` 写一份，`run_p.sh` / `run_d.sh` 都从它读。三条纪律：
+
+1. **五台必须完全一样。** 差一个 `TRUE` / `FALSE`，表现是建链卡住、或者只连上一部分 rank，而且不会告诉你哪台配错了——这类问题只能逐台 `docker inspect` 比。
+2. **只在进程启动时读一次。** 改完必须 `stop.sh` 再 `start.sh`，热改无效。
+3. 走 RoCE 意味着 HCCL 数据面也从 `NIC_NAME` 出去，网卡、MTU、PFC 要和交换机侧对齐；`HCCL_IF_BASE_PORT` 起的端口段，防火墙建议整段放开 `52000-52999`。
+
+确认变量真进了容器，比翻日志快：
+
+```bash
+docker inspect dsv41-3p2d-decode --format '{{range .Config.Env}}{{println .}}{{end}}' | grep HCCL_
+```
+
+#### Mooncake 池化
+
+`KV_CONNECTOR=MooncakeHybridConnector` 这一层本来就走 Mooncake 的传输通道，KV 不直连，而是经 Mooncake 中转。`KV_POOL=on` 时脚本额外把 master 地址注入进去：
+
+```bash
+KV_POOL="on"
+MOONCAKE_MASTER=""      # 留空取 P 组第一台
+```
+
+这里有个边界要说清楚：**脚本只注入环境变量，不改 connector 的 JSON。** 因为 `kv_transfer_config` 里多一个 vllm 不认识的键会直接启动失败，而多一个环境变量是无害的。
+
+如果现场的镜像里 mooncake 版本要求把池地址写进 `kv_transfer_config`（不同版本键名不一样），改 `run_p.sh` / `run_d.sh` 里 `KV_TRANSFER_CONFIG` 那一段，位置有注释标着。另外，跨请求的全局 KV 池还需要 master / metadata 服务先在跑——这件事不在脚本范围内。`KV_POOL=on` 而 master 没起，表现就是连接器指向一个不存在的地址。
 
 ## 参数
 
