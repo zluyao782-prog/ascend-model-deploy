@@ -45,7 +45,7 @@ docker run --rm $IMAGE find /vllm-workspace -name launch_online_dp.py
 
 | 模型 | 形态 | 硬件 | 备注 |
 |---|---|---|---|
-| [DeepSeek-V4.1-Flash](DeepSeek-V4.1-Flash/) | 单机 / 1P1D / 2P2D / 3P2D | A3 ×1 / ×2 / ×4 / ×5 | 552B MoE，w4a8，1M 上下文；3P2D 走 rank 组网 + Mooncake 池化 |
+| [DeepSeek-V4.1-Flash](DeepSeek-V4.1-Flash/) | 单机 / 1P1D / 2P2D / 3P2D | A3 ×1 / ×2 / ×4 / ×5 | 552B MoE，w4a8，1M 上下文；3P2D 走 rank 组网 + Mooncake KV 传输 |
 
 ## 加一个模型
 

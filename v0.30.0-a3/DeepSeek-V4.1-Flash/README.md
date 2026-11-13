@@ -22,7 +22,7 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的四种形态：单机 1 台 16 卡、
 | `single/` | 1 台，16 卡 | DP4 × TP4 | POC、功能验证、小并发 |
 | `pd-1p1d/` | 2 台，32 卡 | P: DP4 × TP4 + D: DP16 | 现场只有两台，或先做小规模 PD 验证 |
 | `pd-2p2d/` | 4 台，64 卡 | P: DP8 × TP4 + D: DP32 | 常规交付：长 prompt、高并发 |
-| `pd-3p2d/` | 5 台，80 卡 | P: DP12 × TP4 + D: DP32 | P 侧吃紧、要走 A3 rank 组网 + Mooncake 池化 |
+| `pd-3p2d/` | 5 台，80 卡 | P: DP12 × TP4 + D: DP32 | P 侧吃紧、要走 A3 rank 组网 + Mooncake KV 传输 |
 
 建议先单机跑通再上 PD。单机能跑说明权重、镜像、CANN 三者匹配，PD 无非多引入网络和 KV 传输两个变量，出问题范围小得多。
 
@@ -231,9 +231,11 @@ HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
 docker inspect dsv41-3p2d-decode --format '{{range .Config.Env}}{{println .}}{{end}}' | grep HCCL_
 ```
 
-#### Mooncake 池化
+#### Mooncake：P→D 的 KV 传输
 
-池化要三样东西：一个跑着的 `mooncake_master`、每台一份 `mooncake.json`、以及指向它的 `MOONCAKE_CONFIG_PATH`。脚本把中间那步接了：
+先说清楚这一层做什么：`MooncakeHybridConnector` 只负责把 P 算好的 KV 传到 D，**不是外部 KV 池**，KV 不跨请求复用。要共享前缀池得用 `AscendStoreConnector`，这版没开，原因写在 `pd-3p2d/README.md` 里。
+
+传输这一层要三样东西：一个跑着的 `mooncake_master`、每台一份 `mooncake.json`、以及指向它的 `MOONCAKE_CONFIG_PATH`。脚本把中间那步接了：
 
 ```bash
 KV_POOL="on"
@@ -247,7 +249,7 @@ MOONCAKE_BUFFER="1GB"          # 每个引擎的本地收发缓冲
 **内存是乘出来的，不是加出来的。** `global_segment_size` 是「每个引擎向池子贡献多少」，vLLM 里一个引擎一个进程一个客户端：
 
 ```
-单台池化占用 ≈ 引擎数 × (global_segment_size + local_buffer_size)
+单台注册量 ≈ 引擎数 × (global_segment_size + local_buffer_size)
 ```
 
 按现在 2GB / 1GB 的配法：
@@ -279,7 +281,7 @@ MOONCAKE_MASTER=""            # 留空 → P1 + MOONCAKE_MASTER_PORT
 MOONCAKE_MASTER_PORT=50099    # 必须和上面 --port 一致
 ```
 
-`metadata_server` 用的是 `P2PHANDSHAKE`：客户端先向 master 交换地址，然后**彼此直连**，KV 不经过 master。所以除了 `50099`，各节点之间的 HCCL 端口段（`52000` 起）也得通——这也是为什么池化的问题经常表现成"连不上对端"，而不是"连不上 master"。
+`metadata_server` 用的是 `P2PHANDSHAKE`：客户端先向 master 交换地址，然后**彼此直连**，KV 不经过 master。所以除了 `50099`，各节点之间的 HCCL 端口段（`52000` 起）也得通——这也是为什么这类问题经常表现成"连不上对端"，而不是"连不上 master"。
 
 内存实在紧的话还有个办法：用 `standalone-store` 模式，让单独的 store 服务持有池子，引擎一侧的 `global_segment_size` 设 0，rank 就完全不占内存。代价是多一个服务要维护，而且它挂了池子就没了。
 
@@ -347,7 +349,7 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 **`unrecognized arguments: --no-swa-bounded-replay`。** 模板里的 vllm 参数是按较新的镜像写的，老版本的 vllm 不认 SWA 重放这两个开关，已经在 `run_p.sh` / `run_d.sh` 里去掉并留了注释。**这类问题的正确解法不是一个个试**——每个都要等半小时启动。`single/`、`pd-1p1d/`、`pd-2p2d/` 里有 `check-flags.sh` 能一次列全；`pd-3p2d/` 是精简版没带，用 `docker run --rm $IMAGE vllm serve -h | grep -E "swa|pcp|engram|speculative"` 手查。
 
-**池化把主机内存吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开池化之前先按「引擎数 ×（段 + 缓冲）」算一遍。
+**注册给传输引擎的内存把主机吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开之前先按「引擎数 ×（段 + 缓冲）」算一遍。
 
 **内网没有镜像就 `docker run`，会卡到超时。** 这是内网最常见的一类"莫名其妙的报错"。现在脚本先 `docker image inspect`，缺镜像直接提示去 load。
 

@@ -38,7 +38,7 @@ export HCCL_INTER_HCCS_DISABLE="$HCCL_INTER_HCCS_DISABLE"
 export HCCL_INTRA_ROCE_ENABLE="$HCCL_INTRA_ROCE_ENABLE"
 export HCCL_IF_BASE_PORT="$HCCL_IF_BASE_PORT"
 
-# ---------------------------------------------------------------- Mooncake 池化
+# ---------------------------------------------------------------- Mooncake（P→D KV 传输）
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/mooncake.json}"
 
 # ---------------------------------------------------------------- KV 生产端

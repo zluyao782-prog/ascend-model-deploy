@@ -1,6 +1,6 @@
 # 五台 PD 分离（3P2D，5 台 × 16 卡）
 
-三台 Prefill、两台 Decode，KV 走 Mooncake 池化。**五台共用同一份 `config.env`。**
+三台 Prefill、两台 Decode，KV 经 Mooncake 从 P 传到 D。**五台共用同一份 `config.env`。**
 目录里只有四个脚本：`start.sh`（按角色起）、`run_p.sh` / `run_d.sh`（单引擎命令）、`stop.sh`。
 
 ## 拓扑
@@ -36,7 +36,7 @@ vim config.env
 ## 起（顺序不能颠倒）
 
 ```bash
-bash start.sh master     # 池化 master，只在一台起（一般 P1）
+bash start.sh master     # Mooncake master，只在一台起（一般 P1）
 bash start.sh decode     # 两台 D，先起
 bash start.sh prefill    # 三台 P
 bash start.sh proxy      # 最后起代理，会先逐个确认后端 /health
@@ -67,7 +67,7 @@ curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions \
   -d '{"model":"dsv41","messages":[{"role":"user","content":"你好"}],"max_tokens":32}'
 ```
 
-## 池化占多少主机内存
+## 每个引擎注册多少主机内存
 
 按引擎乘，不是整台一个值（`MOONCAKE_SEGMENT` + `MOONCAKE_BUFFER`）：
 
@@ -77,6 +77,35 @@ curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions \
 | D1–D2 | 16 | 约 48 GB |
 
 D 台原本就要 384G 起（16 个引擎 + Engram offload），加上这 48G，机器按 512G 准备。
+
+## 外部 KV 池（`AscendStoreConnector`）没开
+
+脚本里的 `MooncakeHybridConnector` 只做 **P→D 的 KV 传输**，KV 不复用、不落池；P 侧的前缀复用靠本地 `--enable-prefix-caching`，只在本机内生效。
+
+官方另有一条池化路径，用的是另一个连接器（就是你看到的那个）：
+
+```json
+{
+  "kv_connector": "AscendStoreConnector",
+  "kv_role": "kv_consumer",
+  "kv_connector_extra_config": {
+    "lookup_rpc_port": "0",
+    "backend": "mooncake",
+    "use_layerwise": false
+  }
+}
+```
+
+PD 场景下它不能单独顶替传输连接器，要套在 `MultiConnector` 里：P 侧放 `MooncakeHybridConnector` + `AscendStoreConnector(kv_producer)`，D 侧只放前者——D 默认不从池里读，要读得显式加 `consumer_is_to_load: true`。
+
+这版没开，原因不是省事：
+
+- `use_layerwise: true` 要配套版本的 mooncake 客户端，官方明确支持的是 `backend: memcache`。mooncake 后端先用 `false`。
+- `kv_load_failure_policy` 对 hybrid 结构（V4 系列）只能用 `fail`，`recompute` 不支持。
+- 除了 `mooncake_master`，还得有 Store 的存储服务；多两个失败点。
+- 这套组合在 V4.1-Flash 上没有公开的成功案例，社区有实测出现乱码的报告。
+
+要试的话，改 `run_p.sh` / `run_d.sh` 里的 `KV_TRANSFER_CONFIG` 换成 `MultiConnector`，`use_layerwise` 先留 `false`，跑通再谈分层传输。
 
 ## 防火墙
 
@@ -93,6 +122,6 @@ D 台原本就要 384G 起（16 个引擎 + Engram offload），加上这 48G，
 
 - **P 那台只有 4 张卡有显存** → `PREFILL_TP` 被改回 1 了，应该是 4。
 - **后端全绿、请求 180 秒超时** → KV 端口没放开，或两侧 connector 不一致。看 `run_p.sh` / `run_d.sh` 里 `kv_connector_extra_config` 的 `dp_size` / `tp_size`。
-- **进程凭空消失，`dmesg` 里有 `killed process`** → 池化内存给多了，降 `MOONCAKE_SEGMENT`。
+- **进程凭空消失，`dmesg` 里有 `killed process`** → 注册给传输引擎的内存给多了，降 `MOONCAKE_SEGMENT`。
 - **报「镜像里没有 launch_online_dp.py」** → 路径不对，用 `docker run --rm $IMAGE find / -name launch_online_dp.py` 查出来填 `IMAGE_DIR`。
 - **报 `unrecognized arguments: --pcp-size`** → 有人把 `PREFILL_PCP` 改成大于 1 了，这个镜像不认。

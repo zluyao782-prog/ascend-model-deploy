@@ -45,7 +45,7 @@ ascend-model-deploy/
 
 `pd-1p1d/`（2 台）、`pd-2p2d/`（4 台）、`pd-3p2d/`（5 台）现在都有。每台的引擎配比是一样的（P 一台 4 引擎 × TP4，D 一台 16 引擎 × TP1），只有节点数和 P/D 各几台不同，所以扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。每个目录里的速查卡也是按各自拓扑写的。
 
-`pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 池化的 master 地址。这几项五台必须一致，改完要整体重启。池化占的主机内存是**按引擎数乘**的（D 台 16 个引擎，段填 2GB 就是 32G 再加缓冲），开之前先算一遍。细节写在模型 README 的「五台 3P2D」里。
+`pd-3p2d/` 多一段东西：A3 的 rank 组网变量（`HCCL_INTER_HCCS_DISABLE` / `HCCL_INTRA_ROCE_ENABLE` / `HCCL_IF_BASE_PORT`），以及 Mooncake 的 master 地址。这几项五台必须一致，改完要整体重启。向传输引擎注册的主机内存是**按引擎数乘**的（D 台 16 个引擎，段填 2GB 就是 32G 再加缓冲），开之前先算一遍。细节写在模型 README 的「五台 3P2D」里。
 
 有几个地方是栽过跟头的：
 
@@ -97,7 +97,7 @@ bash start.sh proxy       # 还在 Prefill 那台，等后端全绿
 bash check.sh
 ```
 
-PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每侧多起几台（D1→D2、P1→P2→P3）。3P2D 多一份 rank 组网配置，还多一个 `start.sh master`（池化 master），并且**砍掉了体检脚本**——只有 `start.sh` / `run_p.sh` / `run_d.sh` / `stop.sh`，验证命令写在它自己的 README 里。
+PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每侧多起几台（D1→D2、P1→P2→P3）。3P2D 多一份 rank 组网配置，还多一个 `start.sh master`（Mooncake master），并且**砍掉了体检脚本**——只有 `start.sh` / `run_p.sh` / `run_d.sh` / `stop.sh`，验证命令写在它自己的 README 里。
 
 顺序别颠倒。Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是卡住、不报错，很容易误判成权重加载慢。代理也一样，后端没全绿就起，客户端只会等到超时——代理自己的 `/healthcheck` 返回 200 只说明注册了几个实例，不代表能用。
 

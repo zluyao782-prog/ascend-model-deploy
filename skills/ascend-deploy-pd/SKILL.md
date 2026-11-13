@@ -1,6 +1,6 @@
 ---
 name: ascend-deploy-pd
-description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-1p1d、pd-2p2d、pd-3p2d、双机部署、3P2D、rank 组网、HCCL_INTER_HCCS_DISABLE、Mooncake 池化、启动顺序、代理端点、KV 传输、dp-rank。
+description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-1p1d、pd-2p2d、pd-3p2d、双机部署、3P2D、rank 组网、HCCL_INTER_HCCS_DISABLE、Mooncake KV 传输、启动顺序、代理端点、KV 传输、dp-rank。
 ---
 
 # PD 分离部署（`pd-<P>p<D>/` 形态）
@@ -21,7 +21,7 @@ Prefill 吃算力、Decode 吃显存带宽，拆开各自扩缩。代价是多�
 cd <版本>/<模型>/pd-2p2d    # 两台用 pd-1p1d、五台用 pd-3p2d，命令一样
 vim config.env          # 每台用同一份
 
-bash start.sh master    # 只有 3P2D 要：池化 master，一台就够
+bash start.sh master    # 只有 3P2D 要：Mooncake master，一台就够
 bash start.sh decode    # 每个 Decode 节点，D1 先
 bash start.sh prefill   # 每个 Prefill 节点，P1 先
 bash start.sh proxy     # 代理节点，等后端全绿（自己会先探一遍）
@@ -76,14 +76,16 @@ HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
 2. **只在进程启动时读一次**。改完必须整体 `stop.sh` + `start.sh`，热改无效。
 3. 数据面从 `NIC_NAME` 出去，MTU/PFC 要和交换机侧对齐；`HCCL_IF_BASE_PORT` 起的端口段在防火墙上整段放开（建议 `52000-52999`）。
 
-## 1.6 Mooncake 池化
+## 1.6 Mooncake：P→D 传输，不是外部池
 
-池化要三样：跑着的 `mooncake_master`、每台一份 `mooncake.json`、指向它的 `MOONCAKE_CONFIG_PATH`。模板里只读环境变量，json 由 `start.sh` 按 `config.env` 生成。
+先分清两件事。`MooncakeHybridConnector` 只做 P→D 的 KV 传输；跨实例的 KV 池是另一个连接器 `AscendStoreConnector`（`backend` / `lookup_rpc_port` / `use_layerwise`），PD 场景要套在 `MultiConnector` 里。**默认只开前者**——V4 这类 hybrid 结构上外部池没有公开成功案例，`use_layerwise` 还要配套客户端。
+
+传输这一层要三样：跑着的 `mooncake_master`、每台一份 `mooncake.json`、指向它的 `MOONCAKE_CONFIG_PATH`。模板里只读环境变量，json 由 `start.sh` 按 `config.env` 生成。
 
 **内存是按引擎乘出来的**，不是整机给一个数：
 
 ```
-单台池化占用 ≈ 引擎数 × (global_segment_size + local_buffer_size)
+单台注册量 ≈ 引擎数 × (global_segment_size + local_buffer_size)
 ```
 
 D 那台 16 引擎、段填 2GB，就是 32G 段 + 16G 缓冲 = 48G，要叠加在原本的主机内存账上。段是显式预留并注册给传输引擎的，`free` 里直接少掉，不是按需增长。内存紧的话用 `standalone-store` 模式，引擎侧段设 0。

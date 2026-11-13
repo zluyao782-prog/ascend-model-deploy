@@ -3,7 +3,7 @@
 # DeepSeek-V4.1-Flash 3P2D 启动（3 台 Prefill + 2 台 Decode）
 #
 # 每台按自己的角色执行一条，顺序不能颠倒：
-#   bash start.sh master     # 池化 master，一台就够（一般 P1）
+#   bash start.sh master     # Mooncake master，一台就够（一般 P1）
 #   bash start.sh decode     # 两台 Decode 节点
 #   bash start.sh prefill    # 三台 Prefill
 #   bash start.sh proxy      # 最后起代理，会先确认后端全绿
@@ -67,7 +67,7 @@ done
 MOUNTS="$MOUNTS -v $MODEL_PATH:$MODEL_PATH -v $PWD:$PWD"
 
 # =============================================================================
-# Mooncake 池化：按 config.env 生成 mooncake.json，再挂给每个引擎
+# Mooncake：按 config.env 生成 mooncake.json，再挂给每个引擎
 # =============================================================================
 mkdir -p "$PWD/.run"
 sed -e "s|@MASTER@|$MOONCAKE_MASTER|" \
@@ -81,7 +81,7 @@ MY_IP=$(ip -4 -o addr show "$NIC_NAME" 2>/dev/null | awk '{print $4}' | cut -d/ 
 [ -n "$MY_IP" ] || { echo "网卡 $NIC_NAME 没有 IPv4，检查 config.env 的 NIC_NAME"; exit 1; }
 
 # =============================================================================
-# 角色 0：Mooncake 池化 master（一台就够，一般放在 P1）
+# 角色 0：Mooncake master（一台就够，一般放在 P1）
 # 没起它，P/D 引擎连不上池子，报错指向对端地址，很难看出是 master 缺席
 # =============================================================================
 if [ "$ROLE" = "master" ]; then
@@ -149,8 +149,8 @@ if [ "$ROLE" != "proxy" ]; then
     echo "   全局 DP    : $GLOBAL_DP（每台 $EACH 个引擎，TP $TP）"
     echo "   本机 rank  : $RANK_START - $((RANK_START + EACH - 1))"
     echo "   引擎端口   : $BASE_PORT - $((BASE_PORT + EACH - 1))"
-    echo "   池化 master: $MOONCAKE_MASTER"
-    echo "   池化内存   : 每引擎 $MOONCAKE_SEGMENT + $MOONCAKE_BUFFER，本机 $EACH 个引擎"
+    echo "   Mooncake   : $MOONCAKE_MASTER（KV 走传输引擎，不是外部池）"
+    echo "   注册内存   : 每引擎 $MOONCAKE_SEGMENT + $MOONCAKE_BUFFER，本机 $EACH 个引擎"
     echo
 
     docker rm -f "$CTR" >/dev/null 2>&1 || true
