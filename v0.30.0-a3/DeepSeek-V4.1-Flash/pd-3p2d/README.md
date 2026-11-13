@@ -63,6 +63,16 @@ mooncake_master --port 50099 --default_kv_lease_ttl 11000 \
 
 要叠加在本来的主机内存上（D 台 384G 打底）。启动时会打印本机要占多少。
 
+## 起之前先体检一次参数
+
+**换过镜像、或者第一次在这台机器上部署，先跑这个**：
+
+```bash
+bash check-flags.sh
+```
+
+它把模板里的参数逐个去问 `vllm serve -h`，几秒钟列出这台镜像不认识的。不然要等引擎堆半小时才在日志里看到 `unrecognized arguments`，一次只能发现一个。
+
 ## 起（顺序不能颠倒）
 
 ```bash

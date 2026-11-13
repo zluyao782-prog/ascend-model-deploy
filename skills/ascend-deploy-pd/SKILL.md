@@ -50,6 +50,8 @@ bash stop.sh
 | 长 prompt、短输出 | 3 台 | 1 台 |
 | 单机放得下 | 不拆，直接用 `single/` | |
 
+**换镜像或首次部署，先跑 `bash check-flags.sh`。** 模板里的 vllm 参数按较新镜像写的，老版本会 `unrecognized arguments`（比如 `--no-swa-bounded-replay`），而每次试错要等引擎堆半小时。这个脚本把参数逐个问 `vllm serve -h`，几秒列全。
+
 launcher 的参数在不同镜像版本里不一样：老版本没有 `--pcp-size`，硬传会 `unrecognized arguments` 直接退出。脚本已按能力探测（`PCP=1` 不传、`PCP>1` 先看 `-h`），模板也兼容只传 7 个位置参数的老版本。但老 launcher 不知道 PCP，可能每个引擎只分 TP 张卡——`npu-smi` 上卡没占满就是没生效。
 
 扩缩容只改节点列表和 `*_DP_LOCAL`：**每台的引擎配比不变**，所以 `run_p.sh` / `run_d.sh` 一个字都不用动，connector 里的 `dp_size` 也是 `config.env` 算出来的。

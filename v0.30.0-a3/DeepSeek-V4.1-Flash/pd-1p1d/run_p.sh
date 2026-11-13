@@ -13,6 +13,8 @@
 #
 # ⚠ 这是 Prefill 专用参数，不要抄到 Decode 用：PCP / MegaMoE / prefix-caching /
 #   eager / swa-bounded-replay 都是 P 侧独有，搬到 D 上会掉性能甚至起不来。
+# 注：SWA 重放（--swa-bounded-replay）这台镜像的 vllm 不支持，传了会
+# unrecognized arguments，先去掉。换到支持它的镜像版本时再加回来。
 # =============================================================================
 set -u
 # 配置路径由 start.sh 用 -e AE_CONFIG 传进来；单独手跑时回落到 ../../config.env
@@ -85,6 +87,5 @@ vllm serve "$MODEL_PATH" \
     --engram-config "$ENGRAM_CONFIG" \
     --additional-config "$ADDITIONAL_CONFIG" \
     --enforce-eager \
-    --swa-bounded-replay \
     --enable-prefix-caching \
     --kv-transfer-config "$KV_TRANSFER_CONFIG"

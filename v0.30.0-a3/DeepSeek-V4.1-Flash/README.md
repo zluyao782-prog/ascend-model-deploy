@@ -343,6 +343,8 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 但老 launcher 不知道 PCP，每个引擎只按 TP 分卡，PCP4 会有一半卡闲置——`npu-smi` 上只有 4 张有显存占用就是没生效。这种要换镜像，或把 P 侧改成 `TP4 × DP4`（`PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`）。
 
+**`unrecognized arguments: --no-swa-bounded-replay`。** 模板里的 vllm 参数是按较新的镜像写的，老版本的 vllm 不认 SWA 重放这两个开关，已经在 `run_p.sh` / `run_d.sh` 里去掉并留了注释。**这类问题的正确解法不是一个个试**——每个都要等半小时启动：跑 `bash check-flags.sh`，一次把所有不认的参数列出来。
+
 **池化把主机内存吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开池化之前先按「引擎数 ×（段 + 缓冲）」算一遍。
 
 **内网没有镜像就 `docker run`，会卡到超时。** 这是内网最常见的一类"莫名其妙的报错"。现在脚本先 `docker image inspect`，缺镜像直接提示去 load。
