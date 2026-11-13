@@ -233,7 +233,12 @@ docker inspect dsv41-3p2d-decode --format '{{range .Config.Env}}{{println .}}{{e
 
 #### Mooncake：P→D 的 KV 传输
 
-先说清楚这一层做什么：`MooncakeHybridConnector` 只负责把 P 算好的 KV 传到 D，**不是外部 KV 池**，KV 不跨请求复用。要共享前缀池得用 `AscendStoreConnector`，这版没开，原因写在 `pd-3p2d/README.md` 里。
+这一层有两个连接器，`config.env` 的 `KV_STORE` 控制：
+
+- `MooncakeHybridConnector`：P 算好的 KV 传到 D，PD 分离必需；
+- `AscendStoreConnector`：把 KV 写进 / 读出 Mooncake 共享池，跨请求复用前缀。
+
+两个一起用时套在 `MultiConnector` 下，默认是开的。hybrid 结构（V4 系列）只能用 `fail` 策略，`use_layerwise` 先关着，风险和验证办法写在 `pd-3p2d/README.md`。
 
 传输这一层要三样东西：一个跑着的 `mooncake_master`、每台一份 `mooncake.json`、以及指向它的 `MOONCAKE_CONFIG_PATH`。脚本把中间那步接了：
 

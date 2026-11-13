@@ -42,19 +42,27 @@ export HCCL_IF_BASE_PORT="$HCCL_IF_BASE_PORT"
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/mooncake.json}"
 
 # ---------------------------------------------------------------- KV 生产端
-# prefill/decode 的 dp_size、tp_size 必须和 D 侧写的一模一样，否则连接器初始化失败
-KV_TRANSFER_CONFIG=$(cat <<JSON
+# 传输连接器：P→D 的 KV 靠它。dp_size / tp_size 两侧必须一模一样
+TRANSFER='{"kv_connector": "'"$KV_CONNECTOR"'", "kv_role": "kv_producer", "kv_port": '"$((KV_PRODUCER_PORT + RANK))"', "kv_connector_extra_config": {"prefill": {"dp_size": '"$P_DP_SIZE"', "tp_size": '"$PREFILL_TP"'}, "decode": {"dp_size": '"$D_DP_SIZE"', "tp_size": '"$DECODE_TP"'}}}'
+
+# 池化连接器：把 KV 写进 Mooncake 共享池
+STORE='{"kv_connector": "AscendStoreConnector", "kv_role": "kv_producer", "kv_connector_extra_config": {"backend": "'"$KV_STORE_BACKEND"'", "lookup_rpc_port": "0", "use_layerwise": false}}'
+
+if [ "$KV_STORE" = "on" ]; then
+    # 两个一起用，必须套 MultiConnector；hybrid 模型只能 fail，不能 recompute
+    KV_TRANSFER_CONFIG=$(cat <<JSON
 {
-  "kv_connector": "$KV_CONNECTOR",
+  "kv_connector": "MultiConnector",
   "kv_role": "kv_producer",
-  "kv_port": $((KV_PRODUCER_PORT + RANK)),
-  "kv_connector_extra_config": {
-    "prefill": {"dp_size": $P_DP_SIZE, "tp_size": $PREFILL_TP},
-    "decode":  {"dp_size": $D_DP_SIZE, "tp_size": $DECODE_TP}
-  }
+  "engine_id": "0",
+  "kv_load_failure_policy": "fail",
+  "kv_connector_extra_config": {"connectors": [$TRANSFER, $STORE]}
 }
 JSON
 )
+else
+    KV_TRANSFER_CONFIG=$TRANSFER
+fi
 
 ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
 SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'

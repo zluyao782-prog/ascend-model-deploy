@@ -78,7 +78,9 @@ HCCL_IF_BASE_PORT=52000          # HCCL 通信端口基址
 
 ## 1.6 Mooncake：P→D 传输，不是外部池
 
-先分清两件事。`MooncakeHybridConnector` 只做 P→D 的 KV 传输；跨实例的 KV 池是另一个连接器 `AscendStoreConnector`（`backend` / `lookup_rpc_port` / `use_layerwise`），PD 场景要套在 `MultiConnector` 里。**默认只开前者**——V4 这类 hybrid 结构上外部池没有公开成功案例，`use_layerwise` 还要配套客户端。
+先分清两件事。`MooncakeHybridConnector` 只做 P→D 的 KV 传输；跨实例的 KV 池是另一个连接器 `AscendStoreConnector`（`backend` / `lookup_rpc_port` / `use_layerwise`），PD 场景两者要套在 `MultiConnector` 里。`config.env` 的 `KV_STORE` 控制开不开，默认 `on`；`KV_STORE_D_READ` 控制 D 侧是否读池（`consumer_is_to_load`）。
+
+`mooncake.json` 只决定「怎么连上 Mooncake」，不决定走哪条连接器——这是现场最容易搞混的一点。**hybrid 结构只能用 `kv_load_failure_policy: fail`，`use_layerwise` 在 mooncake 后端先关着**；V4 系列上外部池没有公开成功案例，上线前必须验证同前缀两次请求的输出是否正常。
 
 传输这一层要三样：跑着的 `mooncake_master`、每台一份 `mooncake.json`、指向它的 `MOONCAKE_CONFIG_PATH`。模板里只读环境变量，json 由 `start.sh` 按 `config.env` 生成。
 

@@ -78,34 +78,63 @@ curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions \
 
 D 台原本就要 384G 起（16 个引擎 + Engram offload），加上这 48G，机器按 512G 准备。
 
-## 外部 KV 池（`AscendStoreConnector`）没开
+## 外部 KV 池（`AscendStoreConnector`）
 
-脚本里的 `MooncakeHybridConnector` 只做 **P→D 的 KV 传输**，KV 不复用、不落池；P 侧的前缀复用靠本地 `--enable-prefix-caching`，只在本机内生效。
-
-官方另有一条池化路径，用的是另一个连接器（就是你看到的那个）：
+P 和 D 两边都挂了池连接器。`KV_STORE="on"`（默认）时，`--kv-transfer-config` 长这样：
 
 ```json
 {
-  "kv_connector": "AscendStoreConnector",
-  "kv_role": "kv_consumer",
+  "kv_connector": "MultiConnector",
+  "kv_role": "kv_producer",
+  "engine_id": "0",
+  "kv_load_failure_policy": "fail",
   "kv_connector_extra_config": {
-    "lookup_rpc_port": "0",
-    "backend": "mooncake",
-    "use_layerwise": false
+    "connectors": [
+      { "kv_connector": "MooncakeHybridConnector", "kv_role": "kv_producer",
+        "kv_port": 30000, "kv_connector_extra_config": { "prefill": {...}, "decode": {...} } },
+      { "kv_connector": "AscendStoreConnector", "kv_role": "kv_producer",
+        "kv_connector_extra_config": {
+          "backend": "mooncake", "lookup_rpc_port": "0", "use_layerwise": false } }
+    ]
   }
 }
 ```
 
-PD 场景下它不能单独顶替传输连接器，要套在 `MultiConnector` 里：P 侧放 `MooncakeHybridConnector` + `AscendStoreConnector(kv_producer)`，D 侧只放前者——D 默认不从池里读，要读得显式加 `consumer_is_to_load: true`。
+D 侧是 `kv_role: kv_consumer`、`engine_id: "1"`，并且多两个键：`consumer_is_to_load`（默认 `true`，从池里读前缀）、`consumer_is_to_put: false`（D 不回写）。
 
-这版没开，原因不是省事：
+**`mooncake.json` 和这个是两回事。** json 只决定"怎么连上 Mooncake"（master 地址、每引擎注册多少内存），连接器决定"连上之后干什么"：`MooncakeHybridConnector` 只管 P→D 传输，`AscendStoreConnector` 才读写共享池。
 
-- `use_layerwise: true` 要配套版本的 mooncake 客户端，官方明确支持的是 `backend: memcache`。mooncake 后端先用 `false`。
-- `kv_load_failure_policy` 对 hybrid 结构（V4 系列）只能用 `fail`，`recompute` 不支持。
-- 除了 `mooncake_master`，还得有 Store 的存储服务；多两个失败点。
-- 这套组合在 V4.1-Flash 上没有公开的成功案例，社区有实测出现乱码的报告。
+三个开关都在 `config.env`：
 
-要试的话，改 `run_p.sh` / `run_d.sh` 里的 `KV_TRANSFER_CONFIG` 换成 `MultiConnector`，`use_layerwise` 先留 `false`，跑通再谈分层传输。
+| 项 | 默认 | 作用 |
+|---|---|---|
+| `KV_STORE` | `on` | `off` 就退回单连接器，只做传输，KV 不跨请求复用 |
+| `KV_STORE_D_READ` | `on` | D 是否从池里读（`consumer_is_to_load`）；`off` 就是只有 P 写 |
+| `KV_STORE_BACKEND` | `mooncake` | 池后端；`memcache` 才完整支持 `use_layerwise` |
+
+`use_layerwise` 固定 `false`：mooncake 后端要配套版本的客户端才支持分层传输，先用整块传。
+
+### 这套的风险，别当没事
+
+- **`kv_load_failure_policy` 只能是 `fail`。** hybrid 结构（V4 系列）不支持 `recompute`，池读失败时请求直接失败，不会自动重算——所以池本身必须稳。
+- **V4.1-Flash 上这套没有公开成功案例**，社区有"池命中后输出乱码"的报告。上线前按下面的办法验一遍，别直接放量。
+- **多一个服务**：`mooncake_master` 之外还要有 Store 的存储端，少一个就连不上池。
+
+### 怎么确认池真的在工作
+
+```bash
+# 1. 三个服务在跑
+docker ps | grep -E "master|prefill|decode"
+
+# 2. 连接器初始化没报错
+docker logs dsv41-3p2d-prefill 2>&1 | grep -iE "store|pool|mooncake" | head
+
+# 3. 同一段长前缀发两次：第二次 TTFT 应该明显下降，且输出正常（乱码就是没对上）
+curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"dsv41","messages":[{"role":"system","content":"<同一段长文本>"},{"role":"user","content":"你好"}],"max_tokens":64}'
+```
+
+第 3 步是唯一能证明池可用的验证：**TTFT 降了但输出乱，说明 KV 对错了**，这时把 `KV_STORE` 关掉回退。
 
 ## 防火墙
 

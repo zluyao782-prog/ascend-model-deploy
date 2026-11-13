@@ -39,19 +39,27 @@ export HCCL_IF_BASE_PORT="$HCCL_IF_BASE_PORT"
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/mooncake.json}"
 
 # ---------------------------------------------------------------- KV 消费端
-# prefill/decode 的 dp_size、tp_size 必须和 P 侧写的一模一样，否则连接器初始化失败
-KV_TRANSFER_CONFIG=$(cat <<JSON
+# 传输连接器：dp_size / tp_size 必须和 P 侧一模一样
+TRANSFER='{"kv_connector": "'"$KV_CONNECTOR"'", "kv_role": "kv_consumer", "kv_port": '"$((KV_CONSUMER_PORT + RANK))"', "kv_connector_extra_config": {"prefill": {"dp_size": '"$P_DP_SIZE"', "tp_size": '"$PREFILL_TP"'}, "decode": {"dp_size": '"$D_DP_SIZE"', "tp_size": '"$DECODE_TP"'}}}'
+
+# 池化连接器：D 默认不读池，KV_STORE_D_READ=on 才从池里捞前缀
+[ "$KV_STORE_D_READ" = "on" ] && D_LOAD=true || D_LOAD=false
+STORE='{"kv_connector": "AscendStoreConnector", "kv_role": "kv_consumer", "kv_connector_extra_config": {"backend": "'"$KV_STORE_BACKEND"'", "lookup_rpc_port": "0", "use_layerwise": false, "consumer_is_to_load": '"$D_LOAD"', "consumer_is_to_put": false}}'
+
+if [ "$KV_STORE" = "on" ]; then
+    KV_TRANSFER_CONFIG=$(cat <<JSON
 {
-  "kv_connector": "$KV_CONNECTOR",
+  "kv_connector": "MultiConnector",
   "kv_role": "kv_consumer",
-  "kv_port": $((KV_CONSUMER_PORT + RANK)),
-  "kv_connector_extra_config": {
-    "prefill": {"dp_size": $P_DP_SIZE, "tp_size": $PREFILL_TP},
-    "decode":  {"dp_size": $D_DP_SIZE, "tp_size": $DECODE_TP}
-  }
+  "engine_id": "1",
+  "kv_load_failure_policy": "fail",
+  "kv_connector_extra_config": {"connectors": [$TRANSFER, $STORE]}
 }
 JSON
 )
+else
+    KV_TRANSFER_CONFIG=$TRANSFER
+fi
 
 ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
 SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'

@@ -149,8 +149,9 @@ if [ "$ROLE" != "proxy" ]; then
     echo "   全局 DP    : $GLOBAL_DP（每台 $EACH 个引擎，TP $TP）"
     echo "   本机 rank  : $RANK_START - $((RANK_START + EACH - 1))"
     echo "   引擎端口   : $BASE_PORT - $((BASE_PORT + EACH - 1))"
-    echo "   Mooncake   : $MOONCAKE_MASTER（KV 走传输引擎，不是外部池）"
+    echo "   Mooncake   : $MOONCAKE_MASTER"
     echo "   注册内存   : 每引擎 $MOONCAKE_SEGMENT + $MOONCAKE_BUFFER，本机 $EACH 个引擎"
+    echo "   外部 KV 池 : $KV_STORE（D 读池: $KV_STORE_D_READ，backend: $KV_STORE_BACKEND）"
     echo
 
     docker rm -f "$CTR" >/dev/null 2>&1 || true
