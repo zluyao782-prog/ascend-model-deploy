@@ -15,7 +15,7 @@ A2 和 A3 的 tag 不能混用。要跑 A2 就新建一个 `v0.30.0-a2/`，别�
 
 | 模型 | 形态 | 硬件 | 备注 |
 |---|---|---|---|
-| [DeepSeek-V4.1-Flash](DeepSeek-V4.1-Flash/) | 单机 / PD 2P2D | A3 ×1 / A3 ×4 | 552B MoE，w4a8，1M 上下文 |
+| [DeepSeek-V4.1-Flash](DeepSeek-V4.1-Flash/) | 单机 / PD 1P1D / PD 2P2D | A3 ×1 / ×2 / ×4 | 552B MoE，w4a8，1M 上下文 |
 
 ## 加一个模型
 
@@ -27,7 +27,9 @@ vim ./Qwen3-32B/single/config.env      # 权重路径、拓扑、端口
 vim ./Qwen3-32B/single/serve.sh        # tokenizer、parser、量化这些模型参数
 ```
 
-只要单机就把 `pd-2p2d/` 删掉，只要组网就把 `single/` 删掉。别留空目录占位。
+只要单机就把两个 pd 目录都删掉，只要组网就把 `single/` 删掉。别留空目录占位。
+
+组网按机器数量选目录：两台用 `pd-1p1d/`，四台用 `pd-2p2d/`。两个目录的 `run_p.sh`、`run_d.sh`、`start.sh`、`check.sh` 内容一样，只有 `config.env` 的节点列表和 `*_DP_LOCAL` 不同——所以真要改逻辑，两份得一起改。
 
 ## 官方脚本
 

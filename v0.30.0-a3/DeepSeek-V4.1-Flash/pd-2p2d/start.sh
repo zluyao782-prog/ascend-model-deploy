@@ -24,6 +24,10 @@ case "$ROLE" in
         ;;
 esac
 
+# 一台机器可能同时跑两个角色（1P1D 里代理就落在 Prefill 那台），容器名必须按角色分开，
+# 否则起代理时那条 docker rm -f 会把正在跑的 Prefill 一起删掉。
+CTR="$CONTAINER_NAME-$ROLE"
+
 # 官方脚本随镜像分发，不落仓库（避免版本漂移）。换镜像版本后路径变了就改这两行。
 IMAGE_DIR="/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1"
 LAUNCHER="$IMAGE_DIR/launch_online_dp.py"
@@ -130,9 +134,9 @@ if [ "$ROLE" != "proxy" ]; then
     echo "   引擎端口    : $BASE_PORT - $((BASE_PORT + EACH - 1))"
     echo
 
-    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm -f "$CTR" >/dev/null 2>&1 || true
 
-    docker run -d --name "$CONTAINER_NAME" \
+    docker run -d --name "$CTR" \
         --ipc=host \
         --network=host \
         --privileged \
@@ -155,10 +159,10 @@ if [ "$ROLE" != "proxy" ]; then
 
     echo
     echo "已启动。每个 rank 都要打印 Application startup complete. 才算就绪，大模型可能几十分钟。"
-    echo "确认就绪： docker logs $CONTAINER_NAME 2>&1 | grep -c 'Application startup complete'"
+    echo "确认就绪： docker logs $CTR 2>&1 | grep -c 'Application startup complete'"
     echo "下面是日志（Ctrl+C 只退出日志，服务继续运行）："
     echo
-    docker logs -f "$CONTAINER_NAME"
+    docker logs -f "$CTR"
     exit 0
 fi
 
@@ -198,9 +202,9 @@ if ! bash ./check.sh backends; then
     exit 1
 fi
 
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+docker rm -f "$CTR" >/dev/null 2>&1 || true
 
-docker run -d --name "$CONTAINER_NAME" \
+docker run -d --name "$CTR" \
     --ipc=host \
     --network=host \
     --privileged \
@@ -219,4 +223,4 @@ docker run -d --name "$CONTAINER_NAME" \
 echo
 echo "已启动代理。验证： bash check.sh"
 echo
-docker logs -f "$CONTAINER_NAME"
+docker logs -f "$CTR"

@@ -44,7 +44,8 @@ done
 
 if [ "$FAIL" != "0" ]; then
     echo
-    echo "有后端没就绪。看日志： docker logs $CONTAINER_NAME 2>&1 | tail -50"
+    echo "有后端没就绪。看日志： docker logs ${CONTAINER_NAME}-decode 2>&1 | tail -50"
+    echo "（Prefill 那边把 decode 换成 prefill）"
     echo "（每个 rank 都应打印 Application startup complete.）"
     exit 1
 fi

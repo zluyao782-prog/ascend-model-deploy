@@ -17,15 +17,17 @@ DeepSeek-V4.1-Flash 在 Atlas 800 A3 上的两套部署：单机一台 16 卡，
 
 ## 单机还是 PD
 
-| | `single/` | `pd-2p2d/` |
-|---|---|---|
-| 硬件 | A3 × 1，16 卡 | A3 × 4，64 卡 |
-| 拓扑 | DP4 × TP4 | P: DP8（PCP4/TP1）+ D: DP32（TP1） |
-| 上下文 | 建议 128K 起 | 能到 1M |
-| 什么时候用 | POC、功能验证、小并发 | 长 prompt、高并发、交付预演 |
-| 多机网络 | 不需要 | 要 RoCE/HCCS，40 个 KV 端口得放开 |
+| | `single/` | `pd-1p1d/` | `pd-2p2d/` |
+|---|---|---|---|
+| 硬件 | A3 × 1，16 卡 | A3 × 2，32 卡 | A3 × 4，64 卡 |
+| 拓扑 | DP4 × TP4 | P: DP4（PCP4）+ D: DP16 | P: DP8（PCP4）+ D: DP32 |
+| 上下文 | 建议 128K 起 | 能到 1M | 能到 1M |
+| 什么时候用 | POC、功能验证、小并发 | 现场只有两台，或者先做小规模 PD 验证 | 长 prompt、高并发、交付预演 |
+| 多机网络 | 不需要 | 两台之间放开 20 个 KV 端口 | 四台，40 个 KV 端口 |
 
 建议先单机跑通再上 PD。单机能跑说明权重、镜像、CANN 三者匹配，PD 无非多引入网络和 KV 传输两个变量，出问题范围小得多。
+
+`pd-1p1d` 和 `pd-2p2d` 是同一份东西的两种规模：**每台的引擎配比完全一样**（P 一台 4 引擎 × PCP4，D 一台 16 引擎 × TP1），区别只是各几台。所以 `run_p.sh`、`run_d.sh` 两边一模一样，扩缩容只改 `config.env` 里的节点列表和 `*_DP_LOCAL`，脚本一个字都不动。
 
 另外官方对 PD 分离的表述是「参考设计，不建议直接用于生产」，生产推荐 MindIE Motor 加 vLLM Ascend。这个目录是拿来做验证、评测和交付预演的。
 
@@ -85,7 +87,7 @@ curl --noproxy '*' http://127.0.0.1:8000/v1/chat/completions \
 
 ## PD 分离
 
-四台 2P2D 的拓扑：
+先看四台 2P2D（`pd-2p2d/`）：
 
 | 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
 |---|---|---|---|---|---|
@@ -131,8 +133,10 @@ Decode 先起是因为 Prefill 会向 Decode 发 KV。Decode 没起来，Prefill
 就绪判定看每个 rank 有没有打印 `Application startup complete.`，Decode 应该 32 条，Prefill 8 条：
 
 ```bash
-docker logs dsv41-pd 2>&1 | grep -c 'Application startup complete'
+docker logs dsv41-2p2d-decode 2>&1 | grep -c 'Application startup complete'
 ```
+
+（容器按角色分开命名，`dsv41-2p2d-prefill` / `-decode` / `-proxy`。这样代理和 Prefill 落在同一台时不会互相顶掉。）
 
 `VLLM_ENGINE_READY_TIMEOUT_S=36000` 是官方兜底值，别调小。权重在共享存储上加载慢、Decode 图捕获也慢，几十分钟很正常，当成挂了白重启一轮更浪费。
 
@@ -145,6 +149,40 @@ bash check.sh        # 后端 → 代理 → 经代理的真实推理
 代理 `/healthcheck` 返回 200 不代表能用，它只说明注册了几个实例。真实请求能出内容，才证明 P→D 的 KV 传输通了。
 
 停下用 `bash stop.sh`。
+
+### 双机（`pd-1p1d/`）
+
+只有两台机器时就是 1P1D：一台全做 Prefill，一台全做 Decode。每台的引擎配比和上面一样，所以参数、镜像、权重都不用动。
+
+| 节点 | 角色 | 本地 DP / TP / PCP | 全局 rank | 逻辑设备 | 端口 |
+|---|---|---|---|---|---|
+| P1 | Prefill | 4 / 1 / 4 | 0–3 | 0–15 | 7100–7103 |
+| D1 | Decode | 16 / 1 / 1 | 0–15 | 0–15 | 7100–7115 |
+
+全局 DP 变成 P 4、D 16，connector 里也跟着变成 `{"prefill":{"dp_size":4,...},"decode":{"dp_size":16,...}}`——这两个数是 `config.env` 算出来的，`run_p.sh` / `run_d.sh` 不用改。
+
+`config.env` 只改节点：
+
+```bash
+PREFILL_NODES="192.168.0.11"
+DECODE_NODES="192.168.0.21"
+PROXY_NODE="192.168.0.11"
+```
+
+启动顺序还是那个顺序，只是每台各一条：
+
+```bash
+# Decode 那台
+bash start.sh decode
+# Prefill 那台
+bash start.sh prefill
+# 还在 Prefill 那台，等后端全绿
+bash start.sh proxy
+```
+
+Prefill 那台会同时有 `dsv41-1p1d-prefill` 和 `dsv41-1p1d-proxy` 两个容器，各自独立。就绪条数：Decode 16 条，Prefill 4 条。
+
+两台之间的防火墙放开 `7100-7115`、`12321`、`30000-30003`、`30100-30115` 就行，比四台少了 D2 那一段。上下文仍然按 1M 配，但 Decode 只有 16 个引擎，并发能撑住的量是 2P2D 的一半；如果压测时显存吃紧，先把 `MAX_MODEL_LEN` 降到 524288。
 
 ## 参数
 

@@ -16,18 +16,21 @@ ascend-model-deploy/
     └── DeepSeek-V4.1-Flash/
         ├── README.md
         ├── single/   config.env  serve.sh  start.sh  check.sh  stop.sh
+        ├── pd-1p1d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
         └── pd-2p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
 ```
 
 进到某个形态目录，要改的基本只有 `config.env`。模型参数在 `serve.sh` / `run_p.sh` / `run_d.sh` 里，打开就是一条 `vllm serve`，参数一行一个。`start.sh`、`check.sh`、`stop.sh` 平时不用动。
 
-## 两种形态
+## 三种形态
 
 | 目录 | 官方参考 | 要注意的地方 |
 |---|---|---|
 | `single/` | 官方「单节点共置部署」 | 单机内 P/D 同进程共置，不是分离。不需要 KV 传输，不需要 RoCE |
 | `pd-<P>p<D>/` | `examples/disaggregated_prefill_v1/` | P、D 各自独立 dp/tp/pcp；走 Mooncake；proxy 端点列表长度必须等于 P+D 的实例数 |
 | `pd-colocated/`（如果要加） | 同 PD | 单机内分卡组，端口段不能重叠，`gpu-memory-utilization` 按卡算 |
+
+`pd-1p1d/` 和 `pd-2p2d/` 现在都有：前者两台各跑一个角色，后者每侧两台。每台的引擎配比是一样的，所以 `run_p.sh` / `run_d.sh` 两份文件内容相同，扩缩容只改 `config.env` 的节点列表和 `*_DP_LOCAL`。
 
 有几个地方是栽过跟头的：
 
@@ -67,21 +70,23 @@ bash start.sh         # 检查环境 → 起容器 → 跟日志
 bash check.sh         # 另开一个窗口验证
 ```
 
-PD 分离，4 台 2P2D：
+PD 分离，2 台 1P1D：
 
 ```bash
-cd v0.30.0-a3/DeepSeek-V4.1-Flash/pd-2p2d
-vim config.env        # 4 台用同一份：节点 IP、拓扑、权重路径
+cd v0.30.0-a3/DeepSeek-V4.1-Flash/pd-1p1d
+vim config.env        # 两台用同一份：P 节点、D 节点、权重路径
 
-bash start.sh decode      # 每个 Decode 节点，D1 先
-bash start.sh prefill     # 每个 Prefill 节点，P1 先
-bash start.sh proxy       # 代理节点，等后端全绿
+bash start.sh decode      # Decode 那台
+bash start.sh prefill     # Prefill 那台
+bash start.sh proxy       # 还在 Prefill 那台，等后端全绿
 bash check.sh
 ```
 
+PD 分离，4 台 2P2D：目录换成 `pd-2p2d`，命令一样，只是每侧多起一台（D1→D2、P1→P2）。
+
 顺序别颠倒。Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是卡住、不报错，很容易误判成权重加载慢。代理也一样，后端没全绿就起，客户端只会等到超时——代理自己的 `/healthcheck` 返回 200 只说明注册了几个实例，不代表能用。
 
-`stop.sh` 停掉本机。残留容器会占着 7100 起的端口，下次 `start.sh` 会在端口检查那一步拦下来，这比让引擎初始化到一半因端口冲突退出好查。
+`stop.sh` 停掉本机。PD 的容器按角色分开命名（`dsv41-1p1d-prefill` / `-decode` / `-proxy`），所以代理和 Prefill 挤在同一台也不会互相顶掉；`stop.sh` 三个一起删。残留容器会占着 7100 起的端口，下次 `start.sh` 会在端口检查那一步拦下来，这比让引擎初始化到一半因端口冲突退出好查。
 
 ## 怎么算跑完
 

@@ -1,6 +1,6 @@
 ---
 name: ascend-deploy-pd
-description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-2p2d、Mooncake、启动顺序、代理端点、KV 传输、dp-rank。
+description: 在多台 Atlas 800 上做 vLLM Ascend 的 Prefill/Decode 分离部署（pd-NpMd 形态），含拓扑设计、rank 推导、启动顺序、代理端点校验与四层验证。当需要跨节点拆分 P/D、排查 KV 传输、或把单机拓扑升级为组网拓扑时使用。触发词：PD 分离、P/D 拆分、pd-1p1d、pd-2p2d、双机部署、Mooncake、启动顺序、代理端点、KV 传输、dp-rank。
 ---
 
 # PD 分离部署（`pd-<P>p<D>/` 形态）
@@ -18,8 +18,8 @@ Prefill 吃算力、Decode 吃显存带宽，拆开各自扩缩。代价是多�
 ## 现场只有一条命令（每台按角色执行）
 
 ```bash
-cd <版本>/<模型>/pd-2p2d
-vim config.env          # 4 台用同一份
+cd <版本>/<模型>/pd-2p2d    # 两台机器就用 pd-1p1d，命令一样
+vim config.env          # 每台用同一份
 
 bash start.sh decode    # 每个 Decode 节点，D1 先
 bash start.sh prefill   # 每个 Prefill 节点，P1 先
@@ -29,6 +29,8 @@ bash stop.sh
 ```
 
 没有 `start_p.sh` / `start_d.sh` / `start_proxy.sh` 三个入口，也没有 `fetch_official.sh`。**角色作为参数传进去，脚本仍然是同一个、可读的那一个。**
+
+容器按角色命名（`<CONTAINER_NAME>-prefill` / `-decode` / `-proxy`），所以代理和 Prefill 落在同一台时不会互相顶掉——现场通常就是这种摆法（代理跑在 P1 上）。看到 `docker logs` 里的容器名就别奇怪为什么带后缀。
 
 ## 1. 设计拓扑：三个数定全局
 
@@ -42,9 +44,12 @@ bash stop.sh
 | 场景特征 | P 组 | D 组 |
 |---|---|---|
 | 平衡（默认） | 每台 4 引擎 × 2 台 → DP8 | 每台 16 引擎 × 2 台 → DP32 |
+| 只有两台机器 | 1 台 → DP4 | 1 台 → DP16 |
 | 长输出、低并发 prompt | 1 台 | 3 台 |
 | 长 prompt、短输出 | 3 台 | 1 台 |
 | 单机放得下 | 不拆，直接用 `single/` | |
+
+扩缩容只改节点列表和 `*_DP_LOCAL`：**每台的引擎配比不变**，所以 `run_p.sh` / `run_d.sh` 一个字都不用动，connector 里的 `dp_size` 也是 `config.env` 算出来的。
 
 - **Decode 偏好大 DP + 小 TP**：解码每步通信量与 TP 强相关，`TP1 × DP16` 是 16 卡机的常态。
 - **Prefill 偏好用 PCP 分担长序列**：`TP1 × PCP4 × DP4` 是常见解。
@@ -102,8 +107,9 @@ KV 端口被拦的表现是**请求挂住到超时，不是报错**。
 ## 5. 就绪闸：每个 rank 都要 `Application startup complete.`
 
 ```bash
-docker logs dsv41-pd 2>&1 | grep -c 'Application startup complete'
-# Decode 节点应看到 32（2 台 × 16）；Prefill 节点应看到 8（2 台 × 4）
+docker logs <CONTAINER_NAME>-decode 2>&1 | grep -c 'Application startup complete'
+# 2P2D：Decode 32 条（2 台 × 16），Prefill 8 条（2 台 × 4）
+# 1P1D：Decode 16 条，Prefill 4 条
 ```
 
 条数对不上就不进下一步。`VLLM_ENGINE_READY_TIMEOUT_S=36000`（10 小时）是官方兜底值，**不要调小**：权重在共享存储上加载、Decode 图捕获都可能几十分钟，误判成"挂了"会白重启一轮。
