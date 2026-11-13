@@ -54,7 +54,7 @@ PROXY_PORT=1999
 docker run --rm $IMAGE find / -name launch_online_dp.py
 ```
 
-确认后改 `start.sh` 顶部那两行即可，不需要额外"提取脚本"的步骤。
+确认后把目录填进 `config.env` 的 `IMAGE_DIR` 即可，不需要额外"提取脚本"的步骤，也不用改脚本。
 
 ## 3. 启动顺序（不可颠倒）
 

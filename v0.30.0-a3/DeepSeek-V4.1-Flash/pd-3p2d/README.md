@@ -108,3 +108,18 @@ bash stop.sh
 ## 起不来
 
 先看 `../../README.md` 的「踩过的坑」。三个高频原因：KV 端口没放开（挂住不报错）、池化内存算多了（进程凭空消失、`dmesg` 有 `killed process`）、rank 组网变量某台不一致（建链卡住）。
+
+**报「镜像里找不到 launch_online_dp.py」** 时按这个顺序：
+
+```bash
+# 1. 查真实路径（不是"文件不在"，先别急着换镜像）
+docker run --rm $IMAGE find / -name launch_online_dp.py
+```
+
+查到了就填进 `config.env`，不用改脚本：
+
+```bash
+IMAGE_DIR="/查到的目录"
+```
+
+查不到才是镜像真没带这份文件，换带 examples 的镜像版本，或从源码同 tag 取出来挂载。

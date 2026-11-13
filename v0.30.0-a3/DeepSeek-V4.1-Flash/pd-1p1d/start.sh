@@ -28,8 +28,10 @@ esac
 # 否则起代理时那条 docker rm -f 会把正在跑的 Prefill 一起删掉。
 CTR="$CONTAINER_NAME-$ROLE"
 
-# 官方脚本随镜像分发，不落仓库（避免版本漂移）。换镜像版本后路径变了就改这两行。
-IMAGE_DIR="/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1"
+# 官方脚本随镜像分发，不落仓库（避免版本漂移）。
+# 路径默认是 vllm-ascend 0.30 的位置；报「镜像里找不到」时把 find 出来的目录
+# 填进 config.env 的 IMAGE_DIR，不用改这个脚本。
+IMAGE_DIR="${IMAGE_DIR:-/vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1}"
 LAUNCHER="$IMAGE_DIR/launch_online_dp.py"
 PROXY="$IMAGE_DIR/load_balance_proxy_server_example.py"
 
@@ -47,8 +49,14 @@ else
     WANT="$LAUNCHER"
 fi
 docker run --rm "$IMAGE" bash -c "test -f '$WANT'" 2>/dev/null || {
-    echo "镜像里找不到 $WANT（或 docker 本身不可用）"
-    echo "查实际路径： docker run --rm $IMAGE find / -name $(basename "$WANT")"
+    echo "镜像里找不到 $WANT"
+    echo
+    echo "先手工跑这两条，分清是路径变了还是文件根本不在："
+    echo "    docker run --rm $IMAGE find / -name $(basename "$WANT")"
+    echo "    docker run --rm $IMAGE bash -c \"test -f '$WANT'; echo 退出码=\$?\""
+    echo
+    echo "查到目录后填进 config.env，不用改脚本："
+    echo "    IMAGE_DIR=/实际/所在/目录"
     exit 1
 }
 

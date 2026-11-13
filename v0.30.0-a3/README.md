@@ -42,4 +42,4 @@ vim ./Qwen3-32B/single/serve.sh        # tokenizer、parser、量化这些模型
 /vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/load_balance_proxy_server_example.py
 ```
 
-换镜像版本后如果路径变了，`start.sh` 会直接报"镜像里找不到 xxx"并给一条 find 命令。照着查出来，改脚本顶部那两行就行。
+换镜像版本后如果路径变了，`start.sh` 会直接报"镜像里找不到 xxx"并给一条 find 命令。照着查出来，把目录填进 `config.env` 的 `IMAGE_DIR` 就行，不用改脚本。

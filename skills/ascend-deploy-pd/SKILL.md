@@ -119,7 +119,7 @@ KV 端口被拦的表现是**请求挂住到超时，不是报错**。
 /vllm-workspace/vllm-ascend/examples/disaggregated_prefill_v1/
 ```
 
-启动前会 `docker run --rm "$IMAGE" test -f` 确认存在。换镜像版本后路径变了，它会明确提示并给出 `find` 命令，改 `start.sh` 顶部两行即可——**不要把它复制进仓库**，抄进来就会随镜像漂移。
+启动前会 `docker run --rm "$IMAGE" test -f` 确认存在。换镜像版本后路径变了，它会明确提示并给出 `find` 命令；查到目录填进 `config.env` 的 `IMAGE_DIR` 即可，不用改脚本——**不要把它复制进仓库**，抄进来就会随镜像漂移。
 
 ## 4. 启动顺序：D 全组 → P 全组 → Proxy（不可颠倒）
 
