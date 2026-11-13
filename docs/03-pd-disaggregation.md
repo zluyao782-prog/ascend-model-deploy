@@ -118,7 +118,7 @@ Decode 端点  : 32 个（2 台 × 16）
 ## 6. 验证
 
 ```bash
-bash check.sh
+bash check.sh        # 单机 / 1P1D / 2P2D 有；3P2D 精简版没有，用它 README 里的 docker logs + curl
 ```
 
 四层，逐层过：

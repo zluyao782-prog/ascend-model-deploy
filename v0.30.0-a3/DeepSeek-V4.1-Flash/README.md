@@ -345,7 +345,7 @@ connector 的拓扑两侧必须一模一样，否则连接器初始化就失败�
 
 如果照着旧文档把 PCP 设成 4，表现是 `npu-smi` 上每台只有 4 张卡有显存占用——不报错，但一半卡在闲置。看到这个先查 `PREFILL_TP`。
 
-**`unrecognized arguments: --no-swa-bounded-replay`。** 模板里的 vllm 参数是按较新的镜像写的，老版本的 vllm 不认 SWA 重放这两个开关，已经在 `run_p.sh` / `run_d.sh` 里去掉并留了注释。**这类问题的正确解法不是一个个试**——每个都要等半小时启动：跑 `bash check-flags.sh`，一次把所有不认的参数列出来。
+**`unrecognized arguments: --no-swa-bounded-replay`。** 模板里的 vllm 参数是按较新的镜像写的，老版本的 vllm 不认 SWA 重放这两个开关，已经在 `run_p.sh` / `run_d.sh` 里去掉并留了注释。**这类问题的正确解法不是一个个试**——每个都要等半小时启动。`single/`、`pd-1p1d/`、`pd-2p2d/` 里有 `check-flags.sh` 能一次列全；`pd-3p2d/` 是精简版没带，用 `docker run --rm $IMAGE vllm serve -h | grep -E "swa|pcp|engram|speculative"` 手查。
 
 **池化把主机内存吃穿了。** `global_segment_size` 是按引擎给的，D 那台 16 个引擎，填 8GB 就是 128GB 一段。主机内存 OOM 的表现是进程凭空消失，`dmesg` 里能看到 `killed process`，没有 Python 栈。开池化之前先按「引擎数 ×（段 + 缓冲）」算一遍。
 

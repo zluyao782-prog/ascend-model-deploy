@@ -1,6 +1,7 @@
 # 五台 PD 分离（3P2D，5 台 × 16 卡）
 
-三台 Prefill、两台 Decode，A3 rank 组网 + Mooncake 池化。**五台共用同一份 `config.env`。**
+三台 Prefill、两台 Decode，KV 走 Mooncake 池化。**五台共用同一份 `config.env`。**
+目录里只有四个脚本：`start.sh`（按角色起）、`run_p.sh` / `run_d.sh`（单引擎命令）、`stop.sh`。
 
 ## 拓扑
 
@@ -14,7 +15,9 @@
 
 connector 是 `prefill dp 12 / decode dp 32`，代理对外 12 + 32 = 44 个端点。
 
-## 改什么
+P 侧是 `TP4 × DP4`，不是 PCP——这个镜像（openEuler 构建）没有 `--pcp-size`，只能靠 TP 占满 16 卡。
+
+## 改哪几项
 
 ```bash
 vim config.env
@@ -22,122 +25,74 @@ vim config.env
 
 | 字段 | 填什么 |
 |---|---|
+| `MODEL_PATH` | 五台同一个绝对路径，容器内外一致 |
+| `NIC_NAME` | 业务网卡名，脚本靠它认出本机是哪台 |
 | `PREFILL_NODES` | 三台 P 的 IP，**顺序就是 rank 顺序** |
 | `DECODE_NODES` | 两台 D 的 IP |
-| `PROXY_NODE` | 代理跑哪台，一般 P1 |
-| `MODEL_PATH` | 五台必须同一绝对路径 |
+| `IMAGE` | 只有现场 tag 和默认值不同时才改 |
 
-## rank 组网：三项五台必须一样
-
-```bash
-HCCL_INTER_HCCS_DISABLE="TRUE"   # 跨机走 RoCE
-HCCL_INTRA_ROCE_ENABLE=1         # 机内也走 RoCE
-HCCL_IF_BASE_PORT=52000          # HCCL 端口基址
-```
-
-差一个值就是建链卡住、或只连上一部分 rank，而且不会告诉你哪台配错。**改完必须整体 `stop.sh` + `start.sh`**，这两个变量只在进程启动时读一次。
-
-核对办法：
-
-```bash
-docker inspect dsv41-3p2d-decode --format '{{range .Config.Env}}{{println .}}{{end}}' | grep HCCL_
-```
-
-## 池化：先起 master
-
-代理那台（或任意一台）先跑：
-
-```bash
-mooncake_master --port 50099 --default_kv_lease_ttl 11000 \
-  --eviction_high_watermark_ratio 0.9 --eviction_ratio 0.1
-```
-
-端口要和 `config.env` 的 `MOONCAKE_MASTER_PORT` 对上。`mooncake.json` 由 `start.sh` 按配置生成，不用手改。
-
-**内存账**：`global_segment_size` 是每个引擎给的，不是整机给的。
-
-| 节点 | 引擎 | 段 2GB + 缓冲 1GB | 合计 |
-|---|---|---|---|
-| P 台 | 4 | 8 + 4 | 约 12 GB |
-| D 台 | 16 | 32 + 16 | 约 48 GB |
-
-要叠加在本来的主机内存上（D 台 384G 打底）。启动时会打印本机要占多少。
-
-## 起之前先体检一次参数
-
-**换过镜像、或者第一次在这台机器上部署，先跑这个**：
-
-```bash
-bash check-flags.sh
-```
-
-它把模板里的参数逐个去问 `vllm serve -h`，几秒钟列出这台镜像不认识的。不然要等引擎堆半小时才在日志里看到 `unrecognized arguments`，一次只能发现一个。
+拓扑和端口不用动。`PREFILL_TP` 保持 4、`PREFILL_PCP` 保持 1。
 
 ## 起（顺序不能颠倒）
 
 ```bash
-# 两台 Decode
-bash start.sh decode
-
-# 三台 Prefill
-bash start.sh prefill
-
-# 代理那台
-bash start.sh proxy
+bash start.sh master     # 池化 master，只在一台起（一般 P1）
+bash start.sh decode     # 两台 D，先起
+bash start.sh prefill    # 三台 P
+bash start.sh proxy      # 最后起代理，会先逐个确认后端 /health
 ```
 
-## 验
+每台只跑自己那一条。脚本会自己认出「本机是这一组的第几台」，算出 rank 起点，起之前在屏幕上打出来供核对。
+
+顺序的原因：Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是**卡住不报错**；代理先起，客户端只会等到超时，而代理自己的 `/healthcheck` 反而是 200。
+
+停止：`bash stop.sh`（把本机四个容器一起删）。
+
+## 怎么算起来了
 
 ```bash
-bash check.sh
+# 每个 rank 一行，Decode 应为 32，Prefill 应为 12
+docker logs dsv41-3p2d-decode 2>&1 | grep -c 'Application startup complete'
+
+# 代理
+docker logs dsv41-3p2d-proxy 2>&1 | tail
+curl --noproxy '*' http://127.0.0.1:1999/healthcheck
 ```
 
-逐个后端（P 12 个 + D 32 个）→ 代理 → 经代理的真实请求。
+真实请求能出内容，才证明 P→D 的 KV 传输通了：
 
-就绪条数：Decode 32 条、Prefill 12 条。
+```bash
+curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"dsv41","messages":[{"role":"user","content":"你好"}],"max_tokens":32}'
+```
 
-## 五台之间要放开
+## 池化占多少主机内存
 
-| 端口 | 谁连谁 | 干什么 |
+按引擎乘，不是整台一个值（`MOONCAKE_SEGMENT` + `MOONCAKE_BUFFER`）：
+
+| 节点 | 引擎数 | 占用 |
 |---|---|---|
-| `7100-7115` | 代理 → 各节点 | 引擎的 OpenAI 接口 |
-| `12321` | 组内各引擎 → 该组第一台 | DP 协调 |
-| `1999` | 客户端 → 代理 | 对外入口 |
-| `50099` | **五台 → master 那台** | 池化元数据 RPC |
-| `30000-30011`、`30100-30131` | P ↔ D | KV 传输 |
-| `52000-52999` | 五台互访 | HCCL 数据面 |
+| P1–P3 | 4 | 约 12 GB |
+| D1–D2 | 16 | 约 48 GB |
 
-全是 TCP。`50099` 这条最容易漏——漏了的表现是引擎起不来或池子注册失败，而不是请求变慢。
+D 台原本就要 384G 起（16 个引擎 + Engram offload），加上这 48G，机器按 512G 准备。
 
-## 停
+## 防火墙
 
-```bash
-bash stop.sh
-```
+| 端口 | 谁连谁 |
+|---|---|
+| `7100-7115` | 代理 → 各引擎，以及节点互访 |
+| `12321` | P/D 组内的 DP 协调 |
+| `1999` | 客户端 → 代理 |
+| `30000-30011`、`30100-30131` | P ↔ D 的 KV 传输 |
+| `50099` | 五台 → master 那台 |
+| `52000-52999` | 五台互访（HCCL 走 RoCE） |
 
-## 起不来
+## 起不来先看这几处
 
-先看 `../../README.md` 的「踩过的坑」。三个高频原因：KV 端口没放开（挂住不报错）、池化内存算多了（进程凭空消失、`dmesg` 有 `killed process`）、rank 组网变量某台不一致（建链卡住）。
-
-**报「镜像里找不到 launch_online_dp.py」** 时按这个顺序：
-
-```bash
-# 1. 查真实路径（不是"文件不在"，先别急着换镜像）
-docker run --rm $IMAGE find / -name launch_online_dp.py
-```
-
-查到了就填进 `config.env`，不用改脚本：
-
-```bash
-IMAGE_DIR="/查到的目录"
-```
-
-查不到才是镜像真没带这份文件，换带 examples 的镜像版本，或从源码同 tag 取出来挂载。
-
-**P 那台只用了 4 张卡。** `npu-smi info` 上只有 4 张有显存占用，说明 `PREFILL_TP` 还是 1。这个镜像没有 PCP，P 侧只能靠 TP 占卡，必须是 `PREFILL_TP=4` / `PREFILL_PCP=1` / `PREFILL_DP_LOCAL=4`——4 引擎 × TP4 = 16 卡。
-
-反过来，如果看到 `unrecognized arguments: --pcp-size` 或 `--prefill-context-parallel-size`，说明 `PREFILL_PCP` 被改成了大于 1 的值。这个构建的 launcher 和 vllm 都不认 PCP，保持 1 即可。
-
-```bash
-npu-smi info     # P 那台应该是 16 张卡都有显存占用
-```
+- **P 那台只有 4 张卡有显存** → `PREFILL_TP` 被改回 1 了，应该是 4。
+- **后端全绿、请求 180 秒超时** → KV 端口没放开，或两侧 connector 不一致。看 `run_p.sh` / `run_d.sh` 里 `kv_connector_extra_config` 的 `dp_size` / `tp_size`。
+- **进程凭空消失，`dmesg` 里有 `killed process`** → 池化内存给多了，降 `MOONCAKE_SEGMENT`。
+- **报「镜像里没有 launch_online_dp.py」** → 路径不对，用 `docker run --rm $IMAGE find / -name launch_online_dp.py` 查出来填 `IMAGE_DIR`。
+- **报 `unrecognized arguments: --pcp-size`** → 有人把 `PREFILL_PCP` 改成大于 1 了，这个镜像不认。

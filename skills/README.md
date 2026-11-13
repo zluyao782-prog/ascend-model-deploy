@@ -4,7 +4,7 @@
 
 ## 里面没有部署代码
 
-skill 里没有一行实现，全部调仓库里的脚本——`start.sh`、`check.sh`、`stop.sh`、`_shared/preflight.sh`。它只干四件事：判断该走哪条路，拦住不该走的路，给出命令顺序，把踩过的坑写成禁令。
+skill 里没有一行实现，全部调仓库里的脚本——`start.sh`、`stop.sh`、`_shared/preflight.sh`（`check.sh` 只在单机 / 1P1D / 2P2D 有，3P2D 精简版砍掉了）。它只干四件事：判断该走哪条路，拦住不该走的路，给出命令顺序，把踩过的坑写成禁令。
 
 这样脚本改了，skill 跟着对，不用两边维护。skill 里如果出现一大段 bash，那说明该写的是仓库里的脚本，不是 skill。
 
@@ -67,7 +67,7 @@ skill 会反复提到这几个文件，分工是固定的：
 | `<形态>/config.env` | 现场实施 | 权重路径、节点 IP、拓扑、端口。基本只改这个 |
 | `<形态>/serve.sh`、`run_p.sh`、`run_d.sh` | 调参的人 | tokenizer、parser、量化、投机解码、offload |
 | `<形态>/start.sh` | 一般不动 | 前置检查 → `docker run` → 跟日志 |
-| `<形态>/check.sh` | 一般不动 | 分层验证，退出码 0 才算通过 |
+| `<形态>/check.sh` | 一般不动 | 分层验证，退出码 0 才算通过（3P2D 没有，验证命令写在它的 README） |
 | `<形态>/stop.sh` | 一般不动 | 删容器 |
 | `_shared/preflight.sh`、`collect_env.sh` | 一般不动 | 可选的上现场体检和证据采集 |
 

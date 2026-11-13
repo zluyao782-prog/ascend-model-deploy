@@ -28,7 +28,7 @@ ascend-model-deploy/
         ├── single/   config.env  serve.sh  start.sh  check.sh  stop.sh
         ├── pd-1p1d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
         ├── pd-2p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
-        └── pd-3p2d/  config.env  start.sh  run_p.sh  run_d.sh  check.sh  stop.sh
+        └── pd-3p2d/  config.env  start.sh  run_p.sh  run_d.sh  stop.sh   # 精简版，只有四个脚本
 ```
 
 每个形态目录里还有一张 `README.md` 现场速查卡——改哪几项、怎么起、怎么验、防火墙放哪些端口。整包拷到现场时照着那张走就行，不用回头翻上级目录。
@@ -97,7 +97,7 @@ bash start.sh proxy       # 还在 Prefill 那台，等后端全绿
 bash check.sh
 ```
 
-PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每侧多起几台（D1→D2、P1→P2→P3）。3P2D 多一份 rank 组网配置，见模型 README。
+PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每侧多起几台（D1→D2、P1→P2→P3）。3P2D 多一份 rank 组网配置，还多一个 `start.sh master`（池化 master），并且**砍掉了体检脚本**——只有 `start.sh` / `run_p.sh` / `run_d.sh` / `stop.sh`，验证命令写在它自己的 README 里。
 
 顺序别颠倒。Decode 没起来就起 Prefill，Prefill 会挂在 KV 连接上，现象是卡住、不报错，很容易误判成权重加载慢。代理也一样，后端没全绿就起，客户端只会等到超时——代理自己的 `/healthcheck` 返回 200 只说明注册了几个实例，不代表能用。
 
@@ -105,7 +105,7 @@ PD 分离还有 4 台 `pd-2p2d` 和 5 台 `pd-3p2d`：命令一样，只是每�
 
 ## 怎么算跑完
 
-不是"进程还活着"就算。判定标准是 `bash check.sh` 退出码 0，能自动查的它都查了。
+不是"进程还活着"就算。单机 / 1P1D / 2P2D 的判定标准是 `bash check.sh` 退出码 0，能自动查的它都查了；3P2D 是精简版，没有这个脚本，按它 README 里的三条命令（`docker logs` 数就绪条数、探后端 `/health`、经代理打一发）逐个确认。
 
 单机三层：`/health` → `/v1/models` → 一次真实对话。PD 是先按后端逐个点名（P 8 个、D 32 个）→ 代理 → 经代理打一次真实请求。最后一层是唯一能证明 P→D 的 KV 传输通了的一步。
 

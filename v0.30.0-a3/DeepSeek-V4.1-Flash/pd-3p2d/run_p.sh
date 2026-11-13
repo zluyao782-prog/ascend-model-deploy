@@ -2,33 +2,22 @@
 # =============================================================================
 # 单个 Prefill 引擎的启动命令
 #
-# 由官方 launch_online_dp.py 调用，固定传 8 个参数（顺序不能改）：
+# 由镜像里的 launch_online_dp.py 调用，固定传 7 个位置参数（顺序不能改）：
 #   $1 本引擎用的卡号（ASCEND_RT_VISIBLE_DEVICES）   $2 端口
 #   $3 --data-parallel-size      $4 --data-parallel-rank
 #   $5 --data-parallel-address   $6 --data-parallel-rpc-port
-#   $7 --tensor-parallel-size    $8 --prefill-context-parallel-size
+#   $7 --tensor-parallel-size
 #
-# start.sh 会把它复制成 .run/<角色>/run_dp_template.sh（launcher 只认这个名字），
-# 所以配置文件从上一级目录读。
+# start.sh 会把它复制成 .run/prefill/run_dp_template.sh（launcher 只认这个名字），
+# 所以配置从上一级目录读。
 #
-# ⚠ 这是 Prefill 专用参数，不要抄到 Decode 用：PCP / MegaMoE / prefix-caching /
-#   eager / swa-bounded-replay 都是 P 侧独有，搬到 D 上会掉性能甚至起不来。
-# 注：SWA 重放（--swa-bounded-replay）这台镜像的 vllm 不支持，传了会
-# unrecognized arguments，先去掉。换到支持它的镜像版本时再加回来。
+# ⚠ P 侧独有的参数不要搬到 Decode：MegaMoE、prefix-caching、eager。
+# ⚠ 这个镜像没有 --prefill-context-parallel-size，P 侧靠 TP4 占卡，别加回来。
 # =============================================================================
 set -u
-# 配置路径由 start.sh 用 -e AE_CONFIG 传进来；单独手跑时回落到 ../../config.env
 . "${AE_CONFIG:-$(dirname "$0")/../../config.env}"
 
 RANK=$4
-# PCP 优先用 launcher 传来的第 8 个参数；这个构建的 launcher 只传 7 个，回落到 config
-PCP="${8:-${PREFILL_PCP:-1}}"
-
-# 这个镜像的 vllm 也没有 --prefill-context-parallel-size（PCP 恒为 1），传了会
-# unrecognized arguments。PCP=1 时整条不传；换到支持 PCP 的官方构建、把
-# PREFILL_PCP 改成 4 时，这里会自动带上。
-PCP_ARG=""
-[ "$PCP" != "1" ] && PCP_ARG="--prefill-context-parallel-size $PCP"
 
 # ---------------------------------------------------------------- 通信环境
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
@@ -37,27 +26,23 @@ export HCCL_IF_IP="${HCCL_IF_IP:-127.0.0.1}"
 export HCCL_SOCKET_IFNAME="$NIC_NAME"
 export GLOO_SOCKET_IFNAME="$NIC_NAME"
 export TP_SOCKET_IFNAME="$NIC_NAME"
-export VLLM_ENGINE_READY_TIMEOUT_S=36000     # 官方兜底值，加载慢也别调小
+export VLLM_ENGINE_READY_TIMEOUT_S=36000     # 加载慢也别调小
 export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
 export HCCL_BUFFSIZE=1024                    # P 侧偏小：prompt 吞吐优先
 export HCCL_OP_EXPANSION_MODE=AIV
 export VLLM_USE_V2_MODEL_RUNNER=1
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/usr/local/lib/"
 
-# ---------------------------------------------------------------- rank 组网（A3 走 RoCE）
-# 来自 config.env，五台必须一致。只在进程启动时读一次，改了要全部重启。
+# ---------------------------------------------------------------- A3 rank 组网（五台一致）
 export HCCL_INTER_HCCS_DISABLE="$HCCL_INTER_HCCS_DISABLE"
 export HCCL_INTRA_ROCE_ENABLE="$HCCL_INTRA_ROCE_ENABLE"
 export HCCL_IF_BASE_PORT="$HCCL_IF_BASE_PORT"
 
 # ---------------------------------------------------------------- Mooncake 池化
-# 每个引擎按这份 json 里的 global_segment_size 往共享池贡献内存。
-# 路径由 start.sh 用 -e 传进来；单独手跑时回落到 ../../.run/mooncake.json
 export MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-$(dirname "$0")/../../.run/mooncake.json}"
 
 # ---------------------------------------------------------------- KV 生产端
-# 这里的 prefill/decode 的 dp_size 与 tp_size 必须与 D 侧写的一模一样，
-# 否则连接器初始化失败。connector 的 tp_size 就是各自的 TP，PCP 不参与。
+# prefill/decode 的 dp_size、tp_size 必须和 D 侧写的一模一样，否则连接器初始化失败
 KV_TRANSFER_CONFIG=$(cat <<JSON
 {
   "kv_connector": "$KV_CONNECTOR",
@@ -71,7 +56,6 @@ KV_TRANSFER_CONFIG=$(cat <<JSON
 JSON
 )
 
-# Engram 表 24 个 head 在 16 卡上分不匀，A3 必须走 cpu_offload + DP 共享内存
 ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
 SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'
 ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"enable_fused_mc2":2,"enable_flashcomm1":false,"multistream_overlap_shared_expert":false}'
@@ -84,7 +68,6 @@ vllm serve "$MODEL_PATH" \
     --data-parallel-address "$5" \
     --data-parallel-rpc-port "$6" \
     --tensor-parallel-size "$7" \
-    $PCP_ARG \
     --served-model-name "$SERVED_MODEL_NAME" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-batched-tokens 8192 \

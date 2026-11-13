@@ -21,10 +21,11 @@ Prefill 吃算力、Decode 吃显存带宽，拆开各自扩缩。代价是多�
 cd <版本>/<模型>/pd-2p2d    # 两台用 pd-1p1d、五台用 pd-3p2d，命令一样
 vim config.env          # 每台用同一份
 
+bash start.sh master    # 只有 3P2D 要：池化 master，一台就够
 bash start.sh decode    # 每个 Decode 节点，D1 先
 bash start.sh prefill   # 每个 Prefill 节点，P1 先
-bash start.sh proxy     # 代理节点，等后端全绿
-bash check.sh           # 任意能访问代理的机器
+bash start.sh proxy     # 代理节点，等后端全绿（自己会先探一遍）
+bash check.sh           # 单机 / 1P1D / 2P2D 有；3P2D 没有，按它的 README 用 curl 验
 bash stop.sh
 ```
 
@@ -151,7 +152,7 @@ docker logs <CONTAINER_NAME>-decode 2>&1 | grep -c 'Application startup complete
 
 ## 6. 代理：两个闸门都在 `start.sh proxy` 里
 
-1. **就绪闸**：逐个检查 P 的 8 个 + D 的 32 个后端 `/health`，有一个没起来就拒绝启动（调 `check.sh backends`）。
+1. **就绪闸**：逐个检查每个后端 `/health`（2P2D 是 P 8 个 + D 32 个），有一个没起来就拒绝启动。1P1D / 2P2D 调 `check.sh backends`；3P2D 这段直接写在 `start.sh proxy` 里。
 2. **端点等长**：按 `DP_LOCAL × 节点数` 生成列表并打印数量核对：
 
 ```
@@ -164,8 +165,14 @@ Decode 端点  : 32 个（2 台 × 16）
 ## 7. 四层验证
 
 ```bash
-bash check.sh              # 全查
+bash check.sh              # 全查（单机 / 1P1D / 2P2D）
 bash check.sh backends     # 只查后端（代理启动前的闸门）
+
+# 3P2D 没有这个脚本，手动三条：
+docker logs dsv41-3p2d-decode 2>&1 | grep -c 'Application startup complete'
+curl --noproxy '*' http://127.0.0.1:1999/healthcheck
+curl --noproxy '*' http://127.0.0.1:1999/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"dsv41","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
 ```
 
 | 层 | 检查 | 陷阱 |
