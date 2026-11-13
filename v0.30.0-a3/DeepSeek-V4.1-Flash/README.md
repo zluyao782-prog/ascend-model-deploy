@@ -259,16 +259,25 @@ MOONCAKE_BUFFER="1GB"          # 每个引擎的本地收发缓冲
 
 **这段内存是显式预留并注册给传输引擎的**，不是"用了才涨"，`free` 里会直接少掉，别按缓存去算它的账。
 
-master 起在任何一台（一般是代理那台）：
+master 起在任何一台都行，脚本默认取 P 组第一台（`MOONCAKE_MASTER` 留空时）。它要在容器里跑——宿主机一般没装 mooncake：
 
 ```bash
-mooncake_master --port 50099 \
+docker run -d --name dsv41-3p2d-master --network=host \
+  --entrypoint mooncake_master "$IMAGE" \
+  --port 50099 \
   --default_kv_lease_ttl 11000 \
   --eviction_high_watermark_ratio 0.9 \
   --eviction_ratio 0.1
 ```
 
-`50099` 要和 `config.env` 的 `MOONCAKE_MASTER_PORT` 对上。
+**哪台、哪个目录起，都不影响别人连它。** master 这条命令里没有 IP，它只监听端口，不需要知道自己的地址。别的机器靠 `mooncake.json` 里的 `master_server_address` 找到它，这个值由 `config.env` 的 `MOONCAKE_MASTER` 决定，五台生成的是同一份：
+
+```bash
+MOONCAKE_MASTER=""            # 留空 → P1 + MOONCAKE_MASTER_PORT
+MOONCAKE_MASTER_PORT=50099    # 必须和上面 --port 一致
+```
+
+`metadata_server` 用的是 `P2PHANDSHAKE`：客户端先向 master 交换地址，然后**彼此直连**，KV 不经过 master。所以除了 `50099`，各节点之间的 HCCL 端口段（`52000` 起）也得通——这也是为什么池化的问题经常表现成"连不上对端"，而不是"连不上 master"。
 
 内存实在紧的话还有个办法：用 `standalone-store` 模式，让单独的 store 服务持有池子，引擎一侧的 `global_segment_size` 设 0，rank 就完全不占内存。代价是多一个服务要维护，而且它挂了池子就没了。
 
