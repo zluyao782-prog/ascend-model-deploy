@@ -62,8 +62,8 @@ JSON
 
 # Engram 表 24 个 head 在 16 卡上分不匀，A3 必须走 cpu_offload + DP 共享内存
 ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
-SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'
-ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"enable_fused_mc2":2,"enable_flashcomm1":false,"multistream_overlap_shared_expert":false}'
+SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark","enforce_eager":true}'
+ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"enable_fused_mc2":1,"enable_flashcomm1":true,"enable_shared_expert_dp":true}'
 
 vllm serve "$MODEL_PATH" \
     --host 0.0.0.0 \
