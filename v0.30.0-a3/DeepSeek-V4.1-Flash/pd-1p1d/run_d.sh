@@ -49,7 +49,7 @@ JSON
 )
 
 ENGRAM_CONFIG='{"cpu_offload":true,"dp_shared_memory":true}'
-SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark"}'
+SPEC_CONFIG='{"num_speculative_tokens":5,"method":"dspark","enforce_eager":true}'
 ADDITIONAL_CONFIG='{"enable_cpu_binding":true,"multistream_overlap_shared_expert":true,"recompute_scheduler_enable":true}'
 # 图模式：整理解码步的调度开销。捕获阶段 OOM 就改 PIECEWISE，或删掉这一项
 CUDAGRAPH_CONFIG='{"cudagraph_mode":"FULL_DECODE_ONLY"}'
